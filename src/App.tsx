@@ -286,8 +286,8 @@ export default function App() {
               <p>A fast, lightweight disk-space treemap. See where the space went.</p>
               <p className="muted">
                 Built with Rust, Tauri and React.
-                <br />
-                License: to be decided.
+                <br />© 2026 Leafyhead Technologies
+                <br />Released under the MIT License.
               </p>
               <div className="actions">
                 <button onClick={() => setAboutOpen(false)}>Close</button>

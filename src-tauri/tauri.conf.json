@@ -26,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Leafyhead Technologies",
+    "copyright": "Copyright (c) 2026 Leafyhead Technologies",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "shortDescription": "Disk-space treemap",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

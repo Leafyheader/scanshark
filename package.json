@@ -1,6 +1,8 @@
 {
   "name": "scanshark",
   "private": true,
+  "license": "MIT",
+  "author": "Leafyhead Technologies",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
