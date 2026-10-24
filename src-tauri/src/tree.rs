@@ -126,6 +126,34 @@ impl Tree {
         out
     }
 
+    /// Items under the root whose name matches `query`, biggest first, at most `limit` of them,
+    /// with the number of matches in all. A query with `*` or `?` is a wildcard pattern for the
+    /// whole name; otherwise any name containing it matches. Case is ignored either way.
+    pub fn search(&self, query: &str, limit: usize) -> (Vec<NodeId>, usize) {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let pattern: Vec<char> = query.chars().collect();
+        let wildcard = query.contains(['*', '?']);
+        let mut hits: Vec<(u64, NodeId)> = Vec::new();
+        // Walk from the root rather than over `nodes`, which still holds deleted items.
+        let mut stack: Vec<NodeId> = self.nodes[ROOT as usize].children.clone();
+        while let Some(id) = stack.pop() {
+            let n = &self.nodes[id as usize];
+            let name = n.name.to_lowercase();
+            let found = if wildcard { glob(&pattern, &name.chars().collect::<Vec<_>>()) } else { name.contains(&query) };
+            if found {
+                hits.push((n.size, id));
+            }
+            stack.extend_from_slice(&n.children);
+        }
+        let total = hits.len();
+        hits.sort_unstable_by(|a, b| b.cmp(a));
+        hits.truncate(limit);
+        (hits.into_iter().map(|(_, id)| id).collect(), total)
+    }
+
     /// Detaches `id` from the tree and subtracts its totals from every ancestor.
     pub fn remove(&mut self, id: NodeId) -> Result<(), String> {
         let (size, files, dirs, is_dir, parent) = {
@@ -146,6 +174,29 @@ impl Tree {
         }
         Ok(())
     }
+}
+
+/// Whether `name` matches `pattern`, where `*` stands for any run of characters and `?` for one.
+fn glob(pattern: &[char], name: &[char]) -> bool {
+    let (mut p, mut n) = (0, 0);
+    // Where the last `*` was, and how much of the name it has swallowed so far.
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some((p, n));
+            p += 1;
+        } else if let Some((sp, sn)) = star {
+            p = sp + 1;
+            n = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 #[cfg(test)]
@@ -192,5 +243,33 @@ mod tests {
         assert_eq!(tree.find(Path::new("/r")), Some(0));
         assert_eq!(tree.find(Path::new("/r/nope")), None);
         assert_eq!(tree.find(Path::new("/elsewhere")), None);
+    }
+
+    #[test]
+    fn search_by_name() {
+        let tree = Tree {
+            nodes: vec![
+                node("root/", 100, None, vec![1, 2]),
+                node("Photos/", 70, Some(0), vec![3, 4]),
+                node("notes.txt", 25, Some(0), vec![]),
+                node("beach.JPG", 50, Some(1), vec![]),
+                node("photo.jpg.txt", 20, Some(1), vec![]),
+            ],
+            links: HashMap::new(),
+            root_path: PathBuf::from("/r"),
+            disk_total: 0,
+            disk_free: 0,
+            scan_ms: 0,
+            scanned_at: 0,
+            one_filesystem: false,
+            cached: false,
+        };
+        assert_eq!(tree.search("photo", 10), (vec![1, 4], 2));
+        assert_eq!(tree.search("*.jpg", 10), (vec![3], 1));
+        assert_eq!(tree.search("*.txt", 1), (vec![2], 2));
+        assert_eq!(tree.search("n?tes*", 10), (vec![2], 1));
+        assert_eq!(tree.search("  ", 10), (vec![], 0));
+        assert!(glob(&['*'], &[]));
+        assert!(!glob(&['a', '*', 'c'], &['a', 'b']));
     }
 }

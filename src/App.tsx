@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
-import { api, Folder, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./api";
+import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { api, Folder, Hit, NodeInfo, ReportFormat, Root, ScanProgress, Summary, TopFile } from "./api";
 import { formatAge, formatCount, formatSize, percent, setSizeUnits, SizeUnits } from "./format";
 import logo from "./assets/logo.png";
-import { Drives, SummaryCards } from "./Overview";
+import { baseName, Drives, SummaryCards } from "./Overview";
+import { Search } from "./Search";
 import { ListView, Sort } from "./ListView";
 import { Details, TopFiles } from "./Sidebar";
 import { Treemap } from "./Treemap";
@@ -48,6 +49,10 @@ export default function App() {
   /** The scan runs behind a tree that is already on show, instead of under the progress dialog. */
   const [background, setBackground] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The path of a report just written, shown with a link to open it. */
+  const [exported, setExported] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [reportFormat, setReportFormat] = useState<ReportFormat>(() => load("reportFormat", "html"));
 
   const [zoomStack, setZoomStack] = useState<number[]>([0]);
   const [selected, setSelected] = useState<{ id: number; isDir: boolean } | null>(null);
@@ -91,6 +96,7 @@ export default function App() {
   useEffect(() => save("listSort", listSort), [listSort]);
   useEffect(() => save("panels", panels), [panels]);
   useEffect(() => save("units", units), [units]);
+  useEffect(() => save("reportFormat", reportFormat), [reportFormat]);
   useEffect(() => save("topCount", topCount), [topCount]);
   useEffect(() => save("reopen", reopen), [reopen]);
   useEffect(() => {
@@ -216,6 +222,10 @@ export default function App() {
     setZoomStack([0, ...f.trail]);
     setSelected({ id: f.id, isDir: false });
   };
+  const showHit = (h: Hit) => {
+    setZoomStack([0, ...h.trail]);
+    setSelected({ id: h.id, isDir: h.is_dir });
+  };
   const showRootFolder = (f: Folder) => {
     setZoomStack([0, f.id]);
     setSelected(null);
@@ -249,14 +259,17 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && (confirm || settingsOpen || aboutOpen || viewMenu)) {
+      if (e.key === "Escape" && (confirm || settingsOpen || aboutOpen || viewMenu || exportOpen)) {
         setViewMenu(false);
+        setExportOpen(false);
         setConfirm(null);
         setSettingsOpen(false);
         setAboutOpen(false);
         return;
       }
-      if (confirm || settingsOpen || aboutOpen || (scanning && !background)) return;
+      if (confirm || settingsOpen || aboutOpen || exportOpen || (scanning && !background)) return;
+      // Backspace and Delete belong to the text being typed.
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       if (e.key === "Delete" && selected && !scanning) requestDelete(selected.id);
       else if (e.key === "Backspace" || e.key === "Escape") zoomOut();
     };
@@ -310,6 +323,24 @@ export default function App() {
 
   live.current = { summary, zoomStack, selected, crumbs, targetInfo };
 
+  const exportReport = async () => {
+    const id = current;
+    const name = (id === 0 ? baseName(summary?.root_path ?? "") : crumbs[id]?.name) || "scan";
+    const ext = reportFormat === "html" ? "html" : "csv";
+    const path = await saveDialog({
+      defaultPath: `${name} report.${ext}`,
+      filters: [ext === "html" ? { name: "Web page", extensions: ["html"] } : { name: "CSV", extensions: ["csv"] }],
+    });
+    if (!path) return;
+    setExportOpen(false);
+    try {
+      await api.exportReport(id, path, reportFormat, units === "decimal");
+      setExported(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const hasTree = summary !== null;
   const canZoomIn = !!selected?.isDir && selected.id !== current;
 
@@ -339,7 +370,12 @@ export default function App() {
         <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} disabled={!hasTree || view !== "treemap"}>
           Free Space
         </button>
+        <span className="sep" />
+        <button onClick={() => setExportOpen(true)} disabled={!hasTree} title="Save a report of the folder being viewed">
+          Export…
+        </button>
         <span className="grow" />
+        {hasTree && <Search version={version} onPick={showHit} />}
         <div className="menu-wrap">
           <button className={viewMenu ? "open" : ""} onClick={() => setViewMenu((v) => !v)} aria-haspopup="menu" aria-expanded={viewMenu}>
             View ▾
@@ -362,6 +398,13 @@ export default function App() {
         <button onClick={() => setAboutOpen(true)}>About</button>
       </div>
 
+      {exported && (
+        <div className="notice">
+          Report saved to <span className="path">{exported}</span>
+          <a onClick={() => api.openExport().catch((e) => setError(String(e)))}>Open</a>
+          <a onClick={() => setExported(null)}>Dismiss</a>
+        </div>
+      )}
       {error && (
         <div className="error" onClick={() => setError(null)}>
           {error}
@@ -528,6 +571,39 @@ export default function App() {
               </p>
               <div className="actions">
                 <button onClick={() => setAboutOpen(false)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {exportOpen && (
+          <div className="overlay" onClick={() => setExportOpen(false)}>
+            <div className="dialog" onClick={(e) => e.stopPropagation()}>
+              <h2>Export Report</h2>
+              <p className="path">{current === 0 ? summary?.root_path : crumbs[current]?.path}</p>
+              <label>
+                <input type="radio" name="format" checked={reportFormat === "html"} onChange={() => setReportFormat("html")} /> Web
+                page (HTML): totals, the items in this folder and its 50 largest files
+              </label>
+              <label>
+                <input type="radio" name="format" checked={reportFormat === "csv"} onChange={() => setReportFormat("csv")} /> CSV:
+                the items in this folder
+              </label>
+              <label>
+                <input type="radio" name="format" checked={reportFormat === "csv-all"} onChange={() => setReportFormat("csv-all")} />{" "}
+                CSV: every file and folder below it
+                {viewSize !== undefined && (
+                  <span className="muted">
+                    {" "}
+                    ({formatCount(current === 0 ? (summary?.files ?? 0) + (summary?.dirs ?? 0) : (crumbs[current]?.files ?? 0) + (crumbs[current]?.dirs ?? 0))} rows)
+                  </span>
+                )}
+              </label>
+              <div className="actions">
+                <button onClick={() => setExportOpen(false)}>Cancel</button>
+                <button className="primary" onClick={exportReport}>
+                  Save…
+                </button>
               </div>
             </div>
           </div>

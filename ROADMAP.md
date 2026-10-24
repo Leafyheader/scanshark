@@ -31,8 +31,10 @@ Notes from landing the first three: snapshots are kept for the last 5 roots, up 
 
 ## Phase 5: Export and search
 
-- [ ] **Export Report** of the folder being viewed to CSV or HTML.
-- [ ] **Search** by name across the scanned tree, with results that jump to the item.
+- [x] **Export Report** of the folder being viewed to CSV or HTML.
+- [x] **Search** by name across the scanned tree, with results that jump to the item.
+
+Notes: the HTML report is one self-contained page (totals, the folder's items, its 50 largest files) that follows the reader's light or dark setting. CSV comes as the folder's own items or as everything below it, sizes in bytes and in the chosen units, dates in UTC, with names that start like a formula defused. Search ignores case, matches part of a name or a `*`/`?` wildcard pattern for the whole name, and returns the 200 biggest matches with a count of the rest.
 
 ## Known issues
 

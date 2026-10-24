@@ -118,6 +118,35 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 .crumbs .here { color: var(--text); font-weight: 500; }
 .crumbs .chev { color: var(--muted); margin: 0 6px; }
 
+.notice {
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px; font-size: 13px; min-width: 0;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-bottom: 1px solid var(--border);
+}
+.notice .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: normal; }
+.notice a { color: var(--accent); cursor: pointer; }
+.notice a:hover { text-decoration: underline; }
+
+.search { position: relative; }
+.search input {
+  width: 240px; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+}
+.search input:focus { outline: none; border-color: var(--accent); }
+.results { width: 420px; max-height: min(480px, 70vh); padding: 0; overflow: hidden; }
+.results .count { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
+.results .hint { opacity: 0.8; }
+.results ol { list-style: none; margin: 0; padding: 4px; overflow-y: auto; min-height: 0; }
+.results .row {
+  display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; width: 100%; padding: 6px 8px;
+  text-align: left; background: none; border-color: transparent; border-radius: 6px;
+}
+.results .row.picked { background: var(--bg); border-color: var(--accent); }
+.results .name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.results .name .icon { width: 16px; height: 16px; color: var(--muted); }
+.results .size { font-size: 12px; font-variant-numeric: tabular-nums; }
+.results .dir { grid-column: 1 / -1; padding-left: 22px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialog label .muted { color: var(--muted); }
+
 .error {
   padding: 6px 12px; background: var(--danger); color: #fff; cursor: pointer; font-size: 13px;
 }
@@ -264,6 +293,7 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 
 @media (max-width: 1000px) {
   .drives { display: none; }
+  .search input { width: 160px; }
 }
 @media (max-width: 820px) {
   .work { flex-direction: column; }

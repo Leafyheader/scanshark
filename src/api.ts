@@ -76,6 +76,20 @@ export interface Child {
   dirs: number;
 }
 
+export interface Hit {
+  id: number;
+  name: string;
+  /** Folder holding the item, relative to the root. */
+  dir: string;
+  size: number;
+  is_dir: boolean;
+  /** Folders to zoom through from the root to reach the item's folder, top first. */
+  trail: number[];
+}
+
+/** "csv" lists the folder's own items, "csv-all" everything below it. */
+export type ReportFormat = "html" | "csv" | "csv-all";
+
 export interface Root {
   path: string;
   label: string;
@@ -105,6 +119,10 @@ export const api = {
   revealNode: (id: number) => invoke<void>("reveal_node", { id }),
   deleteNode: (id: number) => invoke<Summary>("delete_node", { id }),
   locate: (paths: string[]) => invoke<(number | null)[]>("locate", { paths }),
+  search: (query: string, limit: number) => invoke<{ hits: Hit[]; total: number }>("search", { query, limit }),
+  exportReport: (id: number, path: string, format: ReportFormat, decimal: boolean) =>
+    invoke<void>("export_report", { id, path, format, decimal }),
+  openExport: () => invoke<void>("open_export"),
   cacheSize: () => invoke<number>("cache_size"),
   clearCache: () => invoke<void>("clear_cache"),
 };

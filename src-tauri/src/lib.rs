@@ -1,4 +1,5 @@
 mod layout;
+mod report;
 mod scan;
 mod snapshot;
 mod tree;
@@ -21,6 +22,8 @@ struct AppState {
     tree: Mutex<Option<Arc<Tree>>>,
     cancel: Arc<AtomicBool>,
     scanning: AtomicBool,
+    /// The last report written, which the app can offer to open.
+    last_export: Mutex<Option<PathBuf>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -70,6 +73,26 @@ struct TopFile {
     mtime: i64,
     /// Folders to zoom through to reach the file's folder, top first.
     trail: Vec<NodeId>,
+}
+
+/// A Search result.
+#[derive(Serialize)]
+struct Hit {
+    id: NodeId,
+    name: String,
+    /// Folder holding the item, relative to the root.
+    dir: String,
+    size: u64,
+    is_dir: bool,
+    /// Folders to zoom through from the root to reach the item's folder, top first.
+    trail: Vec<NodeId>,
+}
+
+#[derive(Serialize)]
+struct SearchResults {
+    hits: Vec<Hit>,
+    /// Matches in all, which can be more than `hits` holds.
+    total: usize,
 }
 
 /// One row of the List view.
@@ -466,6 +489,64 @@ fn locate(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<Option<N
     Ok(paths.iter().map(|p| tree.find(Path::new(p))).collect())
 }
 
+/// Items whose name matches `query`, biggest first. Async so a big tree is searched off the UI thread.
+#[tauri::command]
+async fn search(state: State<'_, AppState>, query: String, limit: usize) -> Result<SearchResults, String> {
+    let tree = state.tree.lock().unwrap().clone().ok_or("nothing scanned yet")?;
+    let (ids, total) = tree.search(&query, limit);
+    let hits = ids
+        .into_iter()
+        .map(|id| {
+            let n = &tree.nodes[id as usize];
+            let trail = tree.trail(ROOT, id);
+            let dir: Vec<&str> = trail.iter().map(|&d| &*tree.nodes[d as usize].name).collect();
+            Hit {
+                id,
+                name: n.name.to_string(),
+                dir: dir.join(std::path::MAIN_SEPARATOR_STR),
+                size: n.size,
+                is_dir: n.is_dir,
+                trail,
+            }
+        })
+        .collect();
+    Ok(SearchResults { hits, total })
+}
+
+/// Writes a report of folder `id` to `path`: "html", "csv" (its items) or "csv-all" (everything below it).
+#[tauri::command]
+async fn export_report(
+    state: State<'_, AppState>,
+    id: NodeId,
+    path: String,
+    format: String,
+    decimal: bool,
+) -> Result<(), String> {
+    let tree = state.tree.lock().unwrap().clone().ok_or("nothing scanned yet")?;
+    tree.node(id).ok_or("unknown node")?;
+    let path = PathBuf::from(path);
+    let file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut w = std::io::BufWriter::new(file);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    match format.as_str() {
+        "html" => report::write_html(&tree, id, decimal, now, &mut w),
+        "csv" => report::write_csv(&tree, id, false, decimal, &mut w).map(drop),
+        "csv-all" => report::write_csv(&tree, id, true, decimal, &mut w).map(drop),
+        _ => return Err(format!("unknown report format {format}")),
+    }
+    .and_then(|()| std::io::Write::flush(&mut w))
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    *state.last_export.lock().unwrap() = Some(path);
+    Ok(())
+}
+
+/// Opens the last report written, in the default app for its type.
+#[tauri::command]
+fn open_export(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.last_export.lock().unwrap().clone().ok_or("no report written yet")?;
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn cache_size(app: AppHandle) -> Result<u64, String> {
     Ok(snapshot::total_size(&snapshot_dir(&app)?))
@@ -495,6 +576,9 @@ pub fn run() {
             reveal_node,
             delete_node,
             locate,
+            search,
+            export_report,
+            open_export,
             cache_size,
             clear_cache,
         ])
