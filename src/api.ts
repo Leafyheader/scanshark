@@ -13,7 +13,8 @@ export interface Rect {
   h: number;
   depth: number;
   kind: number;
-  header: boolean;
+  /** Height of the directory name strip, 0 when there is none. */
+  header: number;
   name: string;
   size: number;
   mtime: number;
@@ -27,9 +28,14 @@ export interface Summary {
   disk_total: number;
   disk_free: number;
   scan_ms: number;
+  /** Unix seconds when the scan started. */
+  scanned_at: number;
+  /** Loaded from a snapshot; a fresh scan hasn't replaced it yet. */
+  cached: boolean;
 }
 
 export interface NodeInfo {
+  id: number;
   path: string;
   name: string;
   size: number;
@@ -38,6 +44,17 @@ export interface NodeInfo {
   files: number;
   dirs: number;
   parent_size: number;
+}
+
+export interface TopFile {
+  id: number;
+  name: string;
+  /** Folder holding the file, relative to the folder asked about. */
+  dir: string;
+  size: number;
+  mtime: number;
+  /** Folders to zoom through to reach the file's folder, top first. */
+  trail: number[];
 }
 
 export interface Root {
@@ -56,13 +73,18 @@ export interface ScanProgress {
 
 export const api = {
   listRoots: () => invoke<Root[]>("list_roots"),
-  startScan: (path: string, oneFilesystem: boolean) =>
-    invoke<Summary | null>("start_scan", { path, oneFilesystem }),
+  openCached: (path: string) => invoke<Summary | null>("open_cached", { path }),
+  startScan: (path: string, oneFilesystem: boolean, full: boolean) =>
+    invoke<Summary | null>("start_scan", { path, oneFilesystem, full }),
   cancelScan: () => invoke<void>("cancel_scan"),
   getLayout: (id: number, width: number, height: number, showFree: boolean) =>
     invoke<Rect[]>("get_layout", { id, width, height, showFree }),
   nodeInfo: (id: number) => invoke<NodeInfo>("node_info", { id }),
+  topFiles: (id: number, limit: number) => invoke<TopFile[]>("top_files", { id, limit }),
   openNode: (id: number) => invoke<void>("open_node", { id }),
   revealNode: (id: number) => invoke<void>("reveal_node", { id }),
   deleteNode: (id: number) => invoke<Summary>("delete_node", { id }),
+  locate: (paths: string[]) => invoke<(number | null)[]>("locate", { paths }),
+  cacheSize: () => invoke<number>("cache_size"),
+  clearCache: () => invoke<void>("clear_cache"),
 };

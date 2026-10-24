@@ -27,7 +27,18 @@ rayon = "1.12.0"
 sysinfo = "0.39.6"
 trash = "5.2.9"
 tauri-plugin-dialog = "2.8.3"
+flate2 = "1.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+
+# Dev builds keep line numbers for our own backtraces but skip full debug info, roughly halving target/.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

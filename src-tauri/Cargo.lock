@@ -2937,6 +2937,7 @@ dependencies = [
 name = "scanshark"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "rayon",
  "serde",
  "serde_json",
@@ -2946,6 +2947,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "trash",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -10,10 +10,6 @@ export function formatSize(bytes: number): string {
   return `${i === 0 ? v : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${UNITS[i]}`;
 }
 
-export function formatBytes(bytes: number): string {
-  return `${bytes.toLocaleString()} bytes`;
-}
-
 const dateFmt = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
   month: "short",
@@ -25,6 +21,16 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
 
 export function formatDate(unixSeconds: number): string {
   return unixSeconds > 0 ? dateFmt.format(new Date(unixSeconds * 1000)) : "";
+}
+
+/** "5 min ago", "3 h ago", "2 days ago". */
+export function formatAge(unixSeconds: number): string {
+  const s = Math.max(0, Date.now() / 1000 - unixSeconds);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const d = Math.floor(s / 86400);
+  return d === 1 ? "1 day ago" : `${d} days ago`;
 }
 
 export function formatCount(n: number): string {

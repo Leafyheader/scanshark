@@ -1,22 +1,24 @@
 mod layout;
 mod scan;
+mod snapshot;
 mod tree;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sysinfo::Disks;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use layout::Rect;
 use tree::{NodeId, Tree, ROOT};
 
 #[derive(Default)]
 struct AppState {
-    tree: Mutex<Option<Tree>>,
+    /// Shared with a running scan, which reuses it, and with the thread saving its snapshot.
+    tree: Mutex<Option<Arc<Tree>>>,
     cancel: Arc<AtomicBool>,
     scanning: AtomicBool,
 }
@@ -30,10 +32,14 @@ struct Summary {
     disk_total: u64,
     disk_free: u64,
     scan_ms: u64,
+    scanned_at: i64,
+    /// Loaded from a snapshot; a fresh scan hasn't replaced it yet.
+    cached: bool,
 }
 
 #[derive(Serialize)]
 struct NodeInfo {
+    id: NodeId,
     path: String,
     name: String,
     size: u64,
@@ -42,6 +48,18 @@ struct NodeInfo {
     files: u64,
     dirs: u64,
     parent_size: u64,
+}
+
+#[derive(Serialize)]
+struct TopFile {
+    id: NodeId,
+    name: String,
+    /// Folder holding the file, relative to the folder that was asked about.
+    dir: String,
+    size: u64,
+    mtime: i64,
+    /// Folders to zoom through to reach the file's folder, top first.
+    trail: Vec<NodeId>,
 }
 
 #[derive(Serialize)]
@@ -60,7 +78,7 @@ struct ScanProgress {
     current: String,
 }
 
-fn summarize(tree: &Tree, scan_ms: u64) -> Summary {
+fn summarize(tree: &Tree) -> Summary {
     let root = &tree.nodes[ROOT as usize];
     Summary {
         root_path: tree.root_path.to_string_lossy().into_owned(),
@@ -69,11 +87,42 @@ fn summarize(tree: &Tree, scan_ms: u64) -> Summary {
         dirs: root.dirs,
         disk_total: tree.disk_total,
         disk_free: tree.disk_free,
-        scan_ms,
+        scan_ms: tree.scan_ms,
+        scanned_at: tree.scanned_at,
+        cached: tree.cached,
     }
 }
 
+fn snapshot_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_cache_dir().map(|d| d.join("snapshots")).map_err(|e| e.to_string())
+}
+
+/// FAT and exFAT don't reliably update a folder's modified time when its contents change,
+/// so incremental rescans can't be trusted there.
+fn folder_times_reliable(path: &Path) -> bool {
+    let path = if cfg!(windows) { path.to_path_buf() } else { path.canonicalize().unwrap_or_else(|_| path.to_path_buf()) };
+    Disks::new_with_refreshed_list()
+        .list()
+        .iter()
+        .filter(|d| path.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .is_none_or(|d| !d.file_system().to_string_lossy().to_lowercase().contains("fat"))
+}
+
 /// Total and free bytes of the filesystem holding `path`.
+#[cfg(windows)]
+fn disk_space(path: &Path) -> (u64, u64) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    // Asking Windows directly avoids matching `\\?\C:\...` (what canonicalize returns) against `C:\`.
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let (mut free, mut total) = (0u64, 0u64);
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, std::ptr::null_mut()) };
+    if ok == 0 { (0, 0) } else { (total, free) }
+}
+
+/// Total and free bytes of the filesystem holding `path`.
+#[cfg(not(windows))]
 fn disk_space(path: &Path) -> (u64, u64) {
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     Disks::new_with_refreshed_list()
@@ -107,17 +156,44 @@ fn list_roots() -> Vec<Root> {
     roots
 }
 
+/// Shows the saved snapshot of `path`, if there is one, so there is something to look at while
+/// it is scanned again.
+#[tauri::command]
+async fn open_cached(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<Option<Summary>, String> {
+    if state.scanning.load(Ordering::SeqCst) {
+        return Err("a scan is already running".into());
+    }
+    let dir = snapshot_dir(&app)?;
+    let tree = tauri::async_runtime::spawn_blocking(move || snapshot::load(&dir, Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(tree) = tree else { return Ok(None) };
+    let summary = summarize(&tree);
+    *state.tree.lock().unwrap() = Some(Arc::new(tree));
+    Ok(Some(summary))
+}
+
+/// Scans `path`, reusing unchanged folders from the tree on show when it is of the same root,
+/// unless `full` is set. The result replaces that tree and is saved as a snapshot.
 #[tauri::command]
 async fn start_scan(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     one_filesystem: bool,
+    full: bool,
 ) -> Result<Option<Summary>, String> {
     if state.scanning.swap(true, Ordering::SeqCst) {
         return Err("a scan is already running".into());
     }
     state.cancel.store(false, Ordering::SeqCst);
+    let root = PathBuf::from(&path);
+    let prev = if full {
+        None
+    } else {
+        let current = state.tree.lock().unwrap().clone();
+        current.filter(|t| t.root_path == root && t.one_filesystem == one_filesystem && folder_times_reliable(&root))
+    };
 
     let cancel = state.cancel.clone();
     let progress = Arc::new(scan::Progress::default());
@@ -142,12 +218,12 @@ async fn start_scan(
         })
     };
 
-    let root = PathBuf::from(&path);
     let started = Instant::now();
+    let scanned_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let result = {
         let (root, progress) = (root.clone(), progress.clone());
         tauri::async_runtime::spawn_blocking(move || {
-            scan::scan(&root, &scan::Options { one_filesystem }, &progress, &cancel)
+            scan::scan(&root, &scan::Options { one_filesystem }, &progress, &cancel, prev.as_deref())
         })
         .await
         .map_err(|e| e.to_string())
@@ -157,11 +233,28 @@ async fn start_scan(
     let _ = reporter.join();
     state.scanning.store(false, Ordering::SeqCst);
 
-    let Some(nodes) = result?? else { return Ok(None) };
+    let Some(scanned) = result?? else { return Ok(None) };
     let (disk_total, disk_free) = disk_space(&root);
-    let tree = scan::build_tree(nodes, &root, disk_total, disk_free);
-    let summary = summarize(&tree, started.elapsed().as_millis() as u64);
-    *state.tree.lock().unwrap() = Some(tree);
+    let tree = Arc::new(Tree {
+        nodes: scanned.nodes,
+        links: scanned.links,
+        root_path: root,
+        disk_total,
+        disk_free,
+        scan_ms: started.elapsed().as_millis() as u64,
+        scanned_at,
+        one_filesystem,
+        cached: false,
+    });
+    let summary = summarize(&tree);
+    *state.tree.lock().unwrap() = Some(tree.clone());
+
+    let dir = snapshot_dir(&app)?;
+    std::thread::spawn(move || {
+        if let Err(e) = snapshot::save(&dir, &tree) {
+            eprintln!("saving snapshot of {}: {e}", tree.root_path.display());
+        }
+    });
     Ok(Some(summary))
 }
 
@@ -190,6 +283,7 @@ fn node_info(state: State<'_, AppState>, id: NodeId) -> Result<NodeInfo, String>
     let n = tree.node(id).ok_or("unknown node")?;
     let parent_size = n.parent.and_then(|p| tree.node(p)).map_or(n.size, |p| p.size);
     Ok(NodeInfo {
+        id,
         path: tree.path_of(id).to_string_lossy().into_owned(),
         name: n.name.to_string(),
         size: n.size,
@@ -199,6 +293,30 @@ fn node_info(state: State<'_, AppState>, id: NodeId) -> Result<NodeInfo, String>
         dirs: n.dirs,
         parent_size,
     })
+}
+
+#[tauri::command]
+fn top_files(state: State<'_, AppState>, id: NodeId, limit: usize) -> Result<Vec<TopFile>, String> {
+    let guard = state.tree.lock().unwrap();
+    let tree = guard.as_ref().ok_or("nothing scanned yet")?;
+    tree.node(id).ok_or("unknown node")?;
+    Ok(tree
+        .largest_files(id, limit)
+        .into_iter()
+        .map(|f| {
+            let n = &tree.nodes[f as usize];
+            let trail = tree.trail(id, f);
+            let dir: Vec<&str> = trail.iter().map(|&d| &*tree.nodes[d as usize].name).collect();
+            TopFile {
+                id: f,
+                name: n.name.to_string(),
+                dir: dir.join(std::path::MAIN_SEPARATOR_STR),
+                size: n.size,
+                mtime: n.mtime,
+                trail,
+            }
+        })
+        .collect())
 }
 
 /// Opens a file with its default application, or a folder in the file manager.
@@ -223,6 +341,9 @@ fn reveal_node(state: State<'_, AppState>, id: NodeId) -> Result<(), String> {
 /// Moves a node to the trash and updates the in-memory tree.
 #[tauri::command]
 async fn delete_node(state: State<'_, AppState>, id: NodeId) -> Result<Summary, String> {
+    if state.scanning.load(Ordering::SeqCst) {
+        return Err("wait for the scan to finish before deleting".into());
+    }
     let path = {
         let guard = state.tree.lock().unwrap();
         let tree = guard.as_ref().ok_or("nothing scanned yet")?;
@@ -235,9 +356,28 @@ async fn delete_node(state: State<'_, AppState>, id: NodeId) -> Result<Summary, 
     trash::delete(&path).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let mut guard = state.tree.lock().unwrap();
-    let tree = guard.as_mut().ok_or("nothing scanned yet")?;
+    // Copies the tree if its snapshot is still being written.
+    let tree = Arc::make_mut(guard.as_mut().ok_or("nothing scanned yet")?);
     tree.remove(id)?;
-    Ok(summarize(tree, 0))
+    Ok(summarize(tree))
+}
+
+/// The nodes at `paths` in the current tree, so the view can keep its place after a rescan.
+#[tauri::command]
+fn locate(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<Option<NodeId>>, String> {
+    let guard = state.tree.lock().unwrap();
+    let tree = guard.as_ref().ok_or("nothing scanned yet")?;
+    Ok(paths.iter().map(|p| tree.find(Path::new(p))).collect())
+}
+
+#[tauri::command]
+fn cache_size(app: AppHandle) -> Result<u64, String> {
+    Ok(snapshot::total_size(&snapshot_dir(&app)?))
+}
+
+#[tauri::command]
+fn clear_cache(app: AppHandle) -> Result<(), String> {
+    snapshot::clear(&snapshot_dir(&app)?).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -248,13 +388,18 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             list_roots,
+            open_cached,
             start_scan,
             cancel_scan,
             get_layout,
             node_info,
+            top_files,
             open_node,
             reveal_node,
             delete_node,
+            locate,
+            cache_size,
+            clear_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

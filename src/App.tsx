@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, NodeInfo, Root, ScanProgress, Summary } from "./api";
-import { formatCount, formatSize, percent } from "./format";
+import { api, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./api";
+import { formatAge, formatCount, formatSize, percent } from "./format";
 import logo from "./assets/logo.png";
+import { Details, TopFiles } from "./Sidebar";
 import { Treemap } from "./Treemap";
 import "./App.css";
 
@@ -32,6 +33,8 @@ export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [scanning, setScanning] = useState(false);
+  /** The scan runs behind a tree that is already on show, instead of under the progress dialog. */
+  const [background, setBackground] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [zoomStack, setZoomStack] = useState<number[]>([0]);
@@ -80,23 +83,59 @@ export default function App() {
     getCurrentWindow().setTitle(title).catch(() => {});
   }, [summary]);
 
+  /** The latest view state, read once a scan finishes to keep the same place in the new tree. */
+  const live = useRef<{
+    summary: Summary | null;
+    zoomStack: number[];
+    selected: { id: number; isDir: boolean } | null;
+    crumbs: Record<number, NodeInfo>;
+    targetInfo: NodeInfo | null;
+  } | null>(null);
+
+  /** Finds the zoomed folders and the selection again, by path, after the tree was replaced. */
+  const findPlace = async () => {
+    const { zoomStack, selected, crumbs, targetInfo } = live.current!;
+    const sel = selected && targetInfo?.id === selected.id ? targetInfo.path : "";
+    const ids = await api.locate([...zoomStack.slice(1).map((id) => crumbs[id]?.path ?? ""), sel]);
+    const stack = [0];
+    const lost = ids.slice(0, -1).findIndex((id) => id === null);
+    for (const id of lost < 0 ? ids.slice(0, -1) : ids.slice(0, lost)) stack.push(id!);
+    const selId = ids[ids.length - 1];
+    return { stack, selected: lost < 0 && selId !== null && selected ? { id: selId, isDir: selected.isDir } : null };
+  };
+
+  /** Scans `path`. A tree of the same root, on show or saved from last time, stays up meanwhile. */
   const scan = useCallback(
-    async (path: string) => {
+    async (path: string, full = false) => {
       setError(null);
       setScanning(true);
       setProgress(null);
       try {
-        const s = await api.startScan(path, oneFs);
+        let shown = live.current?.summary?.root_path === path;
+        if (!shown) {
+          const cached = await api.openCached(path);
+          if (cached) {
+            setSummary(cached);
+            setZoomStack([0]);
+            setSelected(null);
+            setVersion((v) => v + 1);
+            shown = true;
+          }
+        }
+        setBackground(shown);
+        const s = await api.startScan(path, oneFs, full);
         if (s) {
+          const place = shown ? await findPlace() : { stack: [0], selected: null };
           setSummary(s);
-          setZoomStack([0]);
-          setSelected(null);
+          setZoomStack(place.stack);
+          setSelected(place.selected);
           setVersion((v) => v + 1);
         }
       } catch (e) {
         setError(String(e));
       } finally {
         setScanning(false);
+        setBackground(false);
       }
     },
     [oneFs],
@@ -128,18 +167,27 @@ export default function App() {
     setZoomStack((s) => s.slice(0, level + 1));
   };
 
-  const requestDelete = async () => {
-    if (!selected) return;
+  /** Jump to one of the Top Files: zoom to its folder and select it. */
+  const showFile = (f: TopFile) => {
+    setZoomStack((s) => [...s, ...f.trail]);
+    setSelected({ id: f.id, isDir: false });
+  };
+
+  /** What the details panel and its buttons act on: the selection, or else the folder being viewed. */
+  const target = selected?.id ?? current;
+
+  const requestDelete = async (id = target) => {
+    if (id === 0) return;
     try {
-      setConfirm(await api.nodeInfo(selected.id));
+      setConfirm(await api.nodeInfo(id));
     } catch (e) {
       setError(String(e));
     }
   };
 
   const doDelete = async () => {
-    if (!selected || !confirm) return;
-    const id = selected.id;
+    if (!confirm) return;
+    const id = confirm.id;
     setConfirm(null);
     try {
       setSummary(await api.deleteNode(id));
@@ -153,23 +201,65 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (confirm || setupOpen || scanning) return;
-      if (e.key === "Delete" && selected && selected.id !== 0) requestDelete();
+      if (e.key === "Escape" && (confirm || setupOpen || aboutOpen)) {
+        setConfirm(null);
+        setSetupOpen(false);
+        setAboutOpen(false);
+        return;
+      }
+      if (confirm || setupOpen || aboutOpen || (scanning && !background)) return;
+      if (e.key === "Delete" && selected && !scanning) requestDelete(selected.id);
       else if (e.key === "Backspace" || e.key === "Escape") zoomOut();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const [crumbNames, setCrumbNames] = useState<Record<number, string>>({});
+  const [crumbs, setCrumbs] = useState<Record<number, NodeInfo>>({});
   useEffect(() => {
     zoomStack.forEach((id) => {
-      if (id !== 0 && !(id in crumbNames)) {
-        api.nodeInfo(id).then((n) => setCrumbNames((c) => ({ ...c, [id]: n.name }))).catch(() => {});
+      if (!(id in crumbs)) {
+        api.nodeInfo(id).then((n) => setCrumbs((c) => ({ ...c, [id]: n }))).catch(() => {});
       }
     });
-  }, [zoomStack, crumbNames]);
-  useEffect(() => setCrumbNames({}), [version]);
+  }, [zoomStack, crumbs]);
+  useEffect(() => setCrumbs({}), [version]);
+  const viewSize = current === 0 ? summary?.total_size : crumbs[current]?.size;
+
+  const [targetInfo, setTargetInfo] = useState<NodeInfo | null>(null);
+  useEffect(() => {
+    if (!summary) return;
+    let stale = false;
+    api.nodeInfo(target).then((n) => !stale && setTargetInfo(n)).catch(() => !stale && setTargetInfo(null));
+    return () => {
+      stale = true;
+    };
+  }, [target, version, summary]);
+
+  const [topFiles, setTopFiles] = useState<TopFile[]>([]);
+  useEffect(() => {
+    if (!summary) return;
+    let stale = false;
+    api.topFiles(current, 10).then((f) => !stale && setTopFiles(f)).catch(() => !stale && setTopFiles([]));
+    return () => {
+      stale = true;
+    };
+  }, [current, version, summary]);
+
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
+  useEffect(() => {
+    if (setupOpen) api.cacheSize().then(setCacheSize).catch(() => setCacheSize(null));
+  }, [setupOpen]);
+  const clearCache = async () => {
+    try {
+      await api.clearCache();
+      setCacheSize(await api.cacheSize());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  live.current = { summary, zoomStack, selected, crumbs, targetInfo };
 
   const hasTree = summary !== null;
   const canZoomIn = !!selected?.isDir && selected.id !== current;
@@ -178,7 +268,20 @@ export default function App() {
     <div className="app">
       <div className="toolbar">
         <button onClick={pickFolder} disabled={scanning}>Open…</button>
-        <button onClick={() => summary && scan(summary.root_path)} disabled={!hasTree || scanning}>Reload</button>
+        <button
+          onClick={() => summary && scan(summary.root_path)}
+          disabled={!hasTree || scanning}
+          title="Scan again, skipping folders that haven't changed"
+        >
+          Reload
+        </button>
+        <button
+          onClick={() => summary && scan(summary.root_path, true)}
+          disabled={!hasTree || scanning}
+          title="Scan everything again, including files that changed size in place"
+        >
+          Full Rescan
+        </button>
         <span className="sep" />
         <button onClick={zoomFull} disabled={!hasTree || zoomStack.length === 1}>Zoom Full</button>
         <button onClick={() => selected && zoomIn(selected.id)} disabled={!canZoomIn}>Zoom In</button>
@@ -186,16 +289,6 @@ export default function App() {
         <span className="sep" />
         <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} disabled={!hasTree}>
           Free Space
-        </button>
-        <span className="sep" />
-        <button onClick={() => selected && api.openNode(selected.id).catch((e) => setError(String(e)))} disabled={!selected}>
-          Open Item
-        </button>
-        <button onClick={() => selected && api.revealNode(selected.id).catch((e) => setError(String(e)))} disabled={!selected}>
-          Show in Folder
-        </button>
-        <button className="danger" onClick={requestDelete} disabled={!selected || selected.id === 0}>
-          Delete
         </button>
         <span className="grow" />
         <button onClick={() => setSetupOpen(true)}>Setup</button>
@@ -210,17 +303,60 @@ export default function App() {
 
       <div className="main">
         {hasTree ? (
-          <Treemap
-            nodeId={current}
-            showFree={showFree}
-            summary={summary}
-            selectedId={selected?.id ?? null}
-            version={version}
-            dark={dark}
-            onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
-            onZoomIn={zoomIn}
-            onZoomOut={zoomOut}
-          />
+          <div className="workspace">
+          <section className="panel">
+            <header className="panel-head">
+              <h2>Disk Usage</h2>
+              <nav className="crumbs">
+                {zoomStack.map((id, i) => (
+                  <span key={`${id}-${i}`}>
+                    {i > 0 && <span className="chev">›</span>}
+                    {i < zoomStack.length - 1 ? (
+                      <a onClick={() => zoomTo(i)}>{i === 0 ? summary.root_path : crumbs[id]?.name ?? "…"}</a>
+                    ) : (
+                      <span className="here">{i === 0 ? summary.root_path : crumbs[id]?.name ?? "…"}</span>
+                    )}
+                  </span>
+                ))}
+              </nav>
+              <span className="grow" />
+              {viewSize !== undefined && (
+                <span className="muted">
+                  {formatSize(viewSize)}
+                  {summary.disk_total > 0 && ` · ${percent(viewSize, summary.disk_total)} of disk`}
+                </span>
+              )}
+            </header>
+            <div className="panel-body">
+              <Treemap
+                nodeId={current}
+                showFree={showFree}
+                summary={summary}
+                selectedId={selected?.id ?? null}
+                version={version}
+                dark={dark}
+                onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
+                onZoomIn={zoomIn}
+                onZoomOut={zoomOut}
+              />
+            </div>
+          </section>
+          <aside className="sidebar">
+            <Details
+              info={targetInfo?.id === target ? targetInfo : null}
+              isSelection={selected !== null}
+              isRoot={target === 0}
+              diskTotal={summary.disk_total}
+              canZoomIn={canZoomIn}
+              canDelete={!scanning}
+              onOpen={() => api.openNode(target).catch((e) => setError(String(e)))}
+              onReveal={() => api.revealNode(target).catch((e) => setError(String(e)))}
+              onZoomIn={() => zoomIn(target)}
+              onDelete={() => requestDelete()}
+            />
+            <TopFiles files={topFiles} selectedId={selected?.id ?? null} onPick={showFile} />
+          </aside>
+          </div>
         ) : (
           <div className="welcome">
             <img className="hero" src={logo} alt="ScanShark" width={220} height={220} />
@@ -245,7 +381,7 @@ export default function App() {
           </div>
         )}
 
-        {scanning && (
+        {scanning && !background && (
           <div className="overlay">
             <div className="dialog">
               <h2>Scanning…</h2>
@@ -312,6 +448,16 @@ export default function App() {
                 <input type="checkbox" checked={oneFs} onChange={(e) => setOneFs(e.target.checked)} /> Stay on one
                 filesystem when scanning
               </label>
+              <div className="setting">
+                <span>
+                  Saved scans{cacheSize !== null && `: ${formatSize(cacheSize)}`}
+                  <br />
+                  <span className="muted">Used to show a drive straight away and rescan it faster.</span>
+                </span>
+                <button onClick={clearCache} disabled={scanning || !cacheSize}>
+                  Clear
+                </button>
+              </div>
               <div className="actions">
                 <button onClick={() => setSetupOpen(false)}>Close</button>
               </div>
@@ -323,18 +469,30 @@ export default function App() {
       <div className="status">
         {summary ? (
           <>
-            <span className="crumbs">
-              {zoomStack.length > 1 &&
-                zoomStack.map((id, i) => (
-                  <span key={`${id}-${i}`}>
-                    <a onClick={() => zoomTo(i)}>{i === 0 ? "Top" : crumbNames[id] ?? "…"}</a>
-                    {i < zoomStack.length - 1 && " › "}
+            {scanning && background ? (
+              <span className="refresh">
+                <span className="spinner" />
+                Refreshing… {formatCount(progress?.files ?? 0)} files · {formatCount(progress?.dirs ?? 0)} folders
+                <span className="path">{progress?.current}</span>
+                <a onClick={() => api.cancelScan()}>Cancel</a>
+              </span>
+            ) : (
+              <span>
+                {summary.cached && <span className="badge">Cached {formatAge(summary.scanned_at)}</span>}
+                {formatCount(summary.files)} files · {formatCount(summary.dirs)} folders · {formatSize(summary.total_size)} scanned
+              </span>
+            )}
+            <span className="disk">
+              {summary.disk_total > 0 && (
+                <>
+                  <span className="bar">
+                    <span style={{ width: percent(summary.disk_total - summary.disk_free, summary.disk_total) }} />
                   </span>
-                ))}
-              {zoomStack.length > 1 && " · "}
-              {formatCount(summary.files)} files · {formatCount(summary.dirs)} folders · {formatSize(summary.total_size)} used
+                  {formatSize(summary.disk_total - summary.disk_free)} used of {formatSize(summary.disk_total)} ·{" "}
+                </>
+              )}
+              {summary.cached ? "last scan took" : "scanned in"} {(summary.scan_ms / 1000).toFixed(1)}s
             </span>
-            <span>scanned in {(summary.scan_ms / 1000).toFixed(1)}s</span>
           </>
         ) : (
           <span>Ready</span>

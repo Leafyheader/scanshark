@@ -11,8 +11,11 @@ Built with Rust, [Tauri 2](https://tauri.app) and React. The release binary is u
 - Parallel scan with live progress; hard links are counted once and symlinks are skipped
 - Squarified treemap on a canvas, colored by folder depth, with name, size and date labels
 - Hover tooltip with path, size, share of the parent folder and file counts
+- Selected Item panel with size, share, file counts, modified date and actions
+- Top Files list of the 10 largest files under the current folder; click one to jump to it
 - Zoom in, out and full; mouse wheel, double-click and breadcrumb navigation
 - Free-space block, reload, "stay on one filesystem" option
+- Scans are saved compactly, so a drive you scanned before shows at once while a quicker rescan skips unchanged folders; **Full Rescan** checks everything
 - Move to trash, open item, show in file manager
 - Light and dark themes
 
@@ -23,8 +26,8 @@ Built with Rust, [Tauri 2](https://tauri.app) and React. The release binary is u
 | Select | Click |
 | Zoom into folder | Double-click, mouse wheel up, or **Zoom In** |
 | Zoom out | Mouse wheel down, Backspace, Esc, or **Zoom Out** |
-| Jump to a level | Click a breadcrumb in the status bar |
-| Delete (to trash) | Delete key or **Delete** |
+| Jump to a level | Click a breadcrumb above the treemap |
+| Delete (to trash) | Delete key, or **Delete** in the Selected Item panel |
 
 ## Build from source
 

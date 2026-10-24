@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, FREE_ID, KIND_DIR, KIND_FILE, KIND_FREE, NodeInfo, Rect, Summary } from "./api";
-import { formatBytes, formatCount, formatDate, formatSize, percent } from "./format";
+import { api, FREE_ID, KIND_DIR, KIND_FREE, NodeInfo, Rect, Summary } from "./api";
+import { formatCount, formatDate, formatSize, percent } from "./format";
 
-const HUES = [50, 185, 125, 290, 20, 215];
-const HEADER_H = 14;
+/** One hue per top-level block, biggest first; everything inside a block shares its hue. */
+const HUES = [221, 152, 268, 28, 188, 352, 46, 318, 200, 96];
+const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
 interface Props {
   nodeId: number;
@@ -18,11 +19,59 @@ interface Props {
   onZoomOut: () => void;
 }
 
-function fill(kind: number, depth: number, dark: boolean): string {
-  if (kind === KIND_FREE) return dark ? "#2a2f38" : "#eef0f4";
-  const hue = HUES[depth % HUES.length];
-  if (kind === KIND_DIR) return dark ? `hsl(${hue} 40% 24%)` : `hsl(${hue} 85% 72%)`;
-  return dark ? `hsl(${hue} 45% 34%)` : `hsl(${hue} 85% 82%)`;
+/** Lightness of a block `level` steps below the top-level one; nested folders alternate so each level stands out. */
+function lightness(kind: number, level: number, dark: boolean): number {
+  const dir = dark ? [30, 41, 35, 45] : [44, 55, 49, 58];
+  const l = dir[Math.min(level, 3)];
+  return kind === KIND_DIR ? l : l + (dark ? 9 : 8);
+}
+
+/** Rounded rect path, falling back to a plain one where `roundRect` is missing or the block is tiny. */
+function shape(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if (r > 0 && w >= 10 && h >= 10 && ctx.roundRect) ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2));
+  else ctx.rect(x, y, w, h);
+}
+
+/** Sibling blocks are drawn inset by this much, leaving a gutter between them. */
+function inset(r: Rect): [number, number, number, number] {
+  return r.w >= 4 && r.h >= 4 ? [r.x + 1, r.y + 1, r.w - 2, r.h - 2] : [r.x, r.y, r.w, r.h];
+}
+
+/** Folder name on the left of its header strip, size on the right when both fit. */
+function header(ctx: CanvasRenderingContext2D, r: Rect, name: string, size: string, fg: string, dim: string) {
+  const big = r.header >= 24;
+  const pad = big ? 9 : 6;
+  const y = r.y + 1 + r.header / 2;
+  const maxW = r.w - pad * 2;
+  ctx.font = `600 ${big ? 13 : 11}px ${FONT}`;
+  const nameW = ctx.measureText(name).width;
+  ctx.font = `${big ? 12 : 10.5}px ${FONT}`;
+  const sizeW = ctx.measureText(size).width;
+  const showSize = nameW + sizeW + 12 <= maxW;
+  if (showSize) {
+    ctx.fillStyle = dim;
+    ctx.textAlign = "right";
+    ctx.fillText(size, r.x + r.w - pad, y);
+  }
+  ctx.font = `600 ${big ? 13 : 11}px ${FONT}`;
+  ctx.fillStyle = fg;
+  ctx.textAlign = "left";
+  ctx.fillText(fit(ctx, name, showSize ? maxW - sizeW - 12 : maxW), r.x + pad, y);
+}
+
+/** Name, size and share stacked in the top-left corner, as many lines as fit. */
+function label(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, lines: string[], fg: string, dim: string) {
+  const pad = w >= 80 && h >= 40 ? 8 : 5;
+  const lh = 15;
+  ctx.textAlign = "left";
+  lines.forEach((t, i) => {
+    if (!t || pad + (i + 1) * lh > h) return;
+    ctx.font = i === 0 ? `600 11.5px ${FONT}` : `11px ${FONT}`;
+    ctx.fillStyle = i === 0 ? fg : dim;
+    const s = fit(ctx, t, w - pad * 2);
+    if (s) ctx.fillText(s, x + pad, y + pad + i * lh + lh / 2 - 1);
+  });
 }
 
 function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
@@ -72,7 +121,10 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     if (size.w < 1 || size.h < 1) return;
     let stale = false;
     api.getLayout(nodeId, size.w, size.h, showFree).then((r) => {
-      if (!stale) setRects(r);
+      if (stale) return;
+      setRects(r);
+      setHover(null); // indexes into the old rects
+    }).catch(() => {
     });
     return () => {
       stale = true;
@@ -90,49 +142,58 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     ctx.clearRect(0, 0, size.w, size.h);
     ctx.textBaseline = "middle";
 
-    const line = dark ? "rgba(0,0,0,0.65)" : "rgba(0,0,0,0.55)";
-    const ink = dark ? "#e8eaee" : "#111";
-    const dim = dark ? "#aab0bb" : "#333";
+    const ink = dark ? "#e6ebf5" : "#15181d";
+    const muted = dark ? "#8b97b0" : "#5d6573";
+    const total = rects[0]?.size ?? 0;
+    let hue = 0;
+    let topLevel = -1;
 
-    for (const r of rects) {
-      ctx.fillStyle = fill(r.kind, r.depth, dark);
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = line;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(Math.floor(r.x) + 0.5, Math.floor(r.y) + 0.5, Math.max(0, r.w - 1), Math.max(0, r.h - 1));
+    rects.forEach((r, i) => {
+      if (r.depth === 1) hue = HUES[++topLevel % HUES.length];
+      const [x, y, w, h] = inset(r);
+      const radius = r.depth <= 1 ? 7 : 4;
+      const share = total > 0 && r.size < total ? ` (${percent(r.size, total)})` : "";
 
-      if (r.kind === KIND_DIR && r.header && r.name) {
-        ctx.font = "11px system-ui, sans-serif";
-        ctx.fillStyle = ink;
-        ctx.textAlign = "left";
-        ctx.fillText(fit(ctx, r.name, r.w - 8), r.x + 4, r.y + HEADER_H / 2 + 0.5);
-      } else if (r.kind === KIND_FILE && r.name && r.w >= 40 && r.h >= 14) {
-        ctx.font = "11px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        const lines = [r.name];
-        if (r.h >= 30) lines.push(formatBytes(r.size));
-        if (r.h >= 44) lines.push(formatDate(r.mtime));
-        const lh = 14;
-        let y = r.y + r.h / 2 - ((lines.length - 1) * lh) / 2;
-        lines.forEach((t, i) => {
-          ctx.fillStyle = i === 0 ? ink : dim;
-          const s = fit(ctx, t, r.w - 6);
-          if (s) ctx.fillText(s, r.x + r.w / 2, y);
-          y += lh;
-        });
-      } else if (r.kind === KIND_FREE && r.w >= 120 && r.h >= 80) {
-        ctx.font = "12px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = ink;
-        const lines = [
-          `Free Space: ${percent(summary.disk_free, summary.disk_total)}`,
-          `${formatSize(summary.disk_free)} free`,
-          `Files: ${formatCount(summary.files)}`,
-          `Folders: ${formatCount(summary.dirs)}`,
-        ];
-        lines.forEach((t, i) => ctx.fillText(t, r.x + r.w / 2, r.y + r.h / 2 + (i - 1.5) * 16));
+      if (r.depth === 0) return; // the view's own folder is the backdrop
+
+      let fg = "#fff";
+      let fgDim = "rgba(255,255,255,0.72)";
+      if (r.kind === KIND_FREE) {
+        ctx.fillStyle = dark ? "#1c263b" : "#e7ebf2";
+        shape(ctx, x, y, w, h, radius);
+        ctx.fill();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = dark ? "#3a4763" : "#b4bccb";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        fg = ink;
+        fgDim = muted;
+      } else {
+        const l = lightness(r.kind, r.depth - 1, dark);
+        ctx.fillStyle = `hsl(${hue} ${dark ? 55 : 62}% ${l}%)`;
+        shape(ctx, x, y, w, h, radius);
+        ctx.fill();
+        if (r.kind === KIND_DIR && w >= 6 && h >= 6) {
+          ctx.strokeStyle = r.depth === 1 ? `hsl(${hue} 80% ${dark ? 60 : 38}%)` : `hsl(${hue} 60% ${l + (dark ? 12 : -10)}%)`;
+          ctx.lineWidth = r.depth === 1 ? 1.5 : 1;
+          ctx.stroke();
+        }
+        if (!dark && l >= 58) {
+          fg = "#0f172a";
+          fgDim = "rgba(15,23,42,0.7)";
+        }
       }
-    }
+
+      if (r.header && r.name) {
+        header(ctx, r, r.name, formatSize(r.size) + share, fg, fgDim);
+      } else if (r.kind === KIND_FREE && w >= 90 && h >= 50) {
+        label(ctx, x, y, w, h, ["Free Space", formatSize(summary.disk_free), `${percent(summary.disk_free, summary.disk_total)} of disk`], fg, fgDim);
+      } else if (r.name && w >= 44 && h >= 18 && !(rects[i + 1]?.depth > r.depth)) {
+        // Rects come parents-first, so a deeper next rect is a child that would cover the label.
+        label(ctx, x, y, w, h, [r.name, formatSize(r.size), share.trim()], fg, fgDim);
+      }
+    });
     draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rects, dark, size, summary]);
@@ -152,17 +213,21 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(base, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const outline = (r: Rect, color: string, width: number) => {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.strokeRect(r.x + width / 2, r.y + width / 2, r.w - width, r.h - width);
-    };
-    if (hover && rects[hover.idx]) {
-      ctx.fillStyle = "rgba(255,255,255,0.22)";
-      const r = rects[hover.idx];
-      ctx.fillRect(r.x, r.y, r.w, r.h);
+    const hovered = hover ? rects[hover.idx] : undefined;
+    if (hovered && hovered.depth > 0) {
+      const [x, y, w, h] = inset(hovered);
+      shape(ctx, x, y, w, h, hovered.depth <= 1 ? 7 : 4);
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.fill();
     }
-    if (selectedIdx >= 0) outline(rects[selectedIdx], dark ? "#7cc4ff" : "#0050d0", 3);
+    if (selectedIdx >= 0) {
+      const r = rects[selectedIdx];
+      const [x, y, w, h] = inset(r);
+      shape(ctx, x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2), r.depth <= 1 ? 6 : 3);
+      ctx.strokeStyle = dark ? "#ffffff" : "#0f172a";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   }
 
   useEffect(draw, [hover, selectedIdx, rects]);

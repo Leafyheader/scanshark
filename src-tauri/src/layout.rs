@@ -9,7 +9,6 @@ pub const KIND_FILE: u8 = 0;
 pub const KIND_DIR: u8 = 1;
 pub const KIND_FREE: u8 = 2;
 
-const HEADER_H: f64 = 14.0;
 const MAX_RECTS: usize = 400_000;
 
 /// Rectangles are emitted parents-first, so the last rect under a point is the deepest.
@@ -22,8 +21,8 @@ pub struct Rect {
     pub h: f32,
     pub depth: u16,
     pub kind: u8,
-    /// Directory rect reserves a strip at the top for its name.
-    pub header: bool,
+    /// Height of the strip a directory reserves at the top for its name; 0 when it has none.
+    pub header: f32,
     pub name: String,
     pub size: u64,
     pub mtime: i64,
@@ -43,15 +42,27 @@ pub fn layout(tree: &Tree, id: NodeId, width: f64, height: f64, show_free: bool)
 fn lay_node(tree: &Tree, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: u16, free: u64, out: &mut Vec<Rect>) {
     let node = &tree.nodes[id as usize];
     if !node.is_dir {
-        push(out, id, x, y, w, h, depth, KIND_FILE, false, &node.name, node.size, node.mtime);
+        push(out, id, x, y, w, h, depth, KIND_FILE, 0.0, &node.name, node.size, node.mtime);
         return;
     }
 
-    let header = w >= 46.0 && h >= 28.0;
-    let (ix, iy, iw, ih) = if header {
-        (x + 2.0, y + HEADER_H, w - 4.0, h - HEADER_H - 2.0)
-    } else if w >= 6.0 && h >= 6.0 {
-        (x + 1.0, y + 1.0, w - 2.0, h - 2.0)
+    // Big blocks get a taller header with room for the size; the padding leaves a gutter around children.
+    // The view's own folder is the backdrop and is named by the UI, so it gets neither.
+    let header = if depth == 0 {
+        0.0
+    } else if w >= 120.0 && h >= 64.0 {
+        24.0
+    } else if w >= 46.0 && h >= 30.0 {
+        16.0
+    } else {
+        0.0
+    };
+    let (ix, iy, iw, ih) = if depth == 0 {
+        (x, y, w, h)
+    } else if header > 0.0 {
+        (x + 3.0, y + header, w - 6.0, h - header - 3.0)
+    } else if w >= 8.0 && h >= 8.0 {
+        (x + 2.0, y + 2.0, w - 4.0, h - 4.0)
     } else {
         (x, y, 0.0, 0.0)
     };
@@ -77,7 +88,7 @@ fn lay_node(tree: &Tree, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: u16,
             return;
         }
         if cid == FREE_ID {
-            push(out, FREE_ID, cx, cy, cw, ch, depth + 1, KIND_FREE, false, "Free Space", free, 0);
+            push(out, FREE_ID, cx, cy, cw, ch, depth + 1, KIND_FREE, 0.0, "Free Space", free, 0);
         } else {
             lay_node(tree, cid, cx, cy, cw, ch, depth + 1, 0, out);
         }
@@ -85,9 +96,9 @@ fn lay_node(tree: &Tree, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: u16,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push(out: &mut Vec<Rect>, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: u16, kind: u8, header: bool, name: &str, size: u64, mtime: i64) {
+fn push(out: &mut Vec<Rect>, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: u16, kind: u8, header: f64, name: &str, size: u64, mtime: i64) {
     // Names are only useful where a label can actually be drawn.
-    let labelled = (header && kind == KIND_DIR) || (w >= 30.0 && h >= 12.0);
+    let labelled = header > 0.0 || (w >= 30.0 && h >= 12.0);
     out.push(Rect {
         id,
         x: x as f32,
@@ -96,7 +107,7 @@ fn push(out: &mut Vec<Rect>, id: NodeId, x: f64, y: f64, w: f64, h: f64, depth: 
         h: h as f32,
         depth,
         kind,
-        header,
+        header: header as f32,
         name: if labelled { name.to_owned() } else { String::new() },
         size,
         mtime,
