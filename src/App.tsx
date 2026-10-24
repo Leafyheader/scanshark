@@ -14,6 +14,14 @@ import "./App.css";
 
 type Theme = "system" | "light" | "dark";
 type View = "treemap" | "list";
+/** The optional parts of the layout, switched on and off from the View menu. */
+type Panels = { drives: boolean; stats: boolean; details: boolean; topFiles: boolean };
+const PANELS: [keyof Panels, string][] = [
+  ["drives", "Drives"],
+  ["stats", "Summary Cards"],
+  ["details", "Item Details"],
+  ["topFiles", "Top Files"],
+];
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -47,6 +55,14 @@ export default function App() {
   const [oneFs, setOneFs] = useState(() => load("oneFs", false));
   const [theme, setTheme] = useState<Theme>(() => load("theme", "system"));
   const [view, setView] = useState<View>(() => load("view", "treemap"));
+  const [panels, setPanels] = useState<Panels>(() => ({
+    drives: true,
+    stats: true,
+    details: true,
+    topFiles: true,
+    ...load<Partial<Panels>>("panels", {}),
+  }));
+  const [viewMenu, setViewMenu] = useState(false);
   const [listSort, setListSort] = useState<Sort>(() => load("listSort", { key: "size", desc: true }));
   const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
   const [setupOpen, setSetupOpen] = useState(false);
@@ -74,6 +90,7 @@ export default function App() {
   useEffect(() => save("theme", theme), [theme]);
   useEffect(() => save("view", view), [view]);
   useEffect(() => save("listSort", listSort), [listSort]);
+  useEffect(() => save("panels", panels), [panels]);
 
   useEffect(() => {
     api.listRoots().then(setRoots).catch(() => {});
@@ -218,7 +235,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && (confirm || setupOpen || aboutOpen)) {
+      if (e.key === "Escape" && (confirm || setupOpen || aboutOpen || viewMenu)) {
+        setViewMenu(false);
         setConfirm(null);
         setSetupOpen(false);
         setAboutOpen(false);
@@ -308,6 +326,24 @@ export default function App() {
           Free Space
         </button>
         <span className="grow" />
+        <div className="menu-wrap">
+          <button className={viewMenu ? "open" : ""} onClick={() => setViewMenu((v) => !v)} aria-haspopup="menu" aria-expanded={viewMenu}>
+            View ▾
+          </button>
+          {viewMenu && (
+            <>
+              <div className="menu-backdrop" onClick={() => setViewMenu(false)} />
+              <div className="menu" role="menu">
+                {PANELS.map(([key, label]) => (
+                  <label key={key} role="menuitemcheckbox" aria-checked={panels[key]}>
+                    <input type="checkbox" checked={panels[key]} onChange={() => setPanels((p) => ({ ...p, [key]: !p[key] }))} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <button onClick={() => setSetupOpen(true)}>Setup</button>
         <button onClick={() => setAboutOpen(true)}>About</button>
       </div>
@@ -321,14 +357,14 @@ export default function App() {
       <div className="main">
         {hasTree ? (
           <div className="workspace">
-          <Drives roots={roots} current={summary} disabled={scanning} onPick={scan} />
+          {panels.drives && <Drives roots={roots} current={summary} disabled={scanning} onPick={scan} />}
           <div className="content">
-          <SummaryCards
+          {panels.stats && <SummaryCards
             summary={summary}
             root={roots.find((r) => r.path === summary.root_path)}
             onShowFile={showRootFile}
             onShowFolder={showRootFolder}
-          />
+          />}
           <div className="work">
           <section className="panel">
             <header className="panel-head">
@@ -387,8 +423,9 @@ export default function App() {
               )}
             </div>
           </section>
+          {(panels.details || panels.topFiles) && (
           <aside className="sidebar">
-            <Details
+            {panels.details && <Details
               info={targetInfo?.id === target ? targetInfo : null}
               isSelection={selected !== null}
               isRoot={target === 0}
@@ -399,9 +436,10 @@ export default function App() {
               onReveal={() => api.revealNode(target).catch((e) => setError(String(e)))}
               onZoomIn={() => zoomIn(target)}
               onDelete={() => requestDelete()}
-            />
-            <TopFiles files={topFiles} selectedId={selected?.id ?? null} onPick={showFile} />
+            />}
+            {panels.topFiles && <TopFiles files={topFiles} selectedId={selected?.id ?? null} onPick={showFile} />}
           </aside>
+          )}
           </div>
           </div>
           </div>
