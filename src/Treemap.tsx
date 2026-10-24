@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, FREE_ID, KIND_DIR, KIND_FREE, NodeInfo, Rect, Summary } from "./api";
-import { formatCount, formatDate, formatSize, percent } from "./format";
+import { formatCount, formatDate, formatSize, percent, SizeUnits } from "./format";
 
 /** One hue per top-level block, biggest first; everything inside a block shares its hue. */
 const HUES = [221, 152, 268, 28, 188, 352, 46, 318, 200, 96];
@@ -14,6 +14,8 @@ interface Props {
   /** Bumped whenever the underlying tree changes (rescan, delete). */
   version: number;
   dark: boolean;
+  /** The size units in use; only here so the labels are drawn again when they change. */
+  units: SizeUnits;
   onSelect: (id: number | null, isDir: boolean) => void;
   onZoomIn: (id: number) => void;
   onZoomOut: () => void;
@@ -86,7 +88,7 @@ function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string 
   return lo > 0 ? text.slice(0, lo) + "…" : "";
 }
 
-export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, onSelect, onZoomIn, onZoomOut }: Props) {
+export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, units, onSelect, onZoomIn, onZoomOut }: Props) {
   const lastWheel = useRef(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -142,8 +144,8 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     ctx.clearRect(0, 0, size.w, size.h);
     ctx.textBaseline = "middle";
 
-    const ink = dark ? "#e6ebf5" : "#15181d";
-    const muted = dark ? "#8b97b0" : "#5d6573";
+    const ink = dark ? "#e6ebf5" : "#2b2620";
+    const muted = dark ? "#8b97b0" : "#73695b";
     const total = rects[0]?.size ?? 0;
     let hue = 0;
     let topLevel = -1;
@@ -159,11 +161,11 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
       let fg = "#fff";
       let fgDim = "rgba(255,255,255,0.72)";
       if (r.kind === KIND_FREE) {
-        ctx.fillStyle = dark ? "#1c263b" : "#e7ebf2";
+        ctx.fillStyle = dark ? "#1c263b" : "#eee7da";
         shape(ctx, x, y, w, h, radius);
         ctx.fill();
         ctx.setLineDash([4, 3]);
-        ctx.strokeStyle = dark ? "#3a4763" : "#b4bccb";
+        ctx.strokeStyle = dark ? "#3a4763" : "#c9bfad";
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.setLineDash([]);
@@ -171,7 +173,7 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
         fgDim = muted;
       } else {
         const l = lightness(r.kind, r.depth - 1, dark);
-        ctx.fillStyle = `hsl(${hue} ${dark ? 55 : 62}% ${l}%)`;
+        ctx.fillStyle = `hsl(${hue} ${dark ? 55 : 50}% ${l}%)`;
         shape(ctx, x, y, w, h, radius);
         ctx.fill();
         if (r.kind === KIND_DIR && w >= 6 && h >= 6) {
@@ -196,7 +198,7 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     });
     draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rects, dark, size, summary]);
+  }, [rects, dark, size, summary, units]);
 
   const selectedIdx = useMemo(
     () => (selectedId === null ? -1 : rects.findIndex((r) => r.id === selectedId)),

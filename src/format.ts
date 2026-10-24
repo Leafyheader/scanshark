@@ -1,10 +1,19 @@
 const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
+/** "binary" counts 1 KB as 1024 bytes, as Windows does; "decimal" as 1000, as drive makers, macOS and GNOME do. */
+export type SizeUnits = "binary" | "decimal";
+let step = 1024;
+
+/** Set from the app's settings before each render. */
+export function setSizeUnits(units: SizeUnits) {
+  step = units === "decimal" ? 1000 : 1024;
+}
+
 export function formatSize(bytes: number): string {
   let v = bytes;
   let i = 0;
-  while (v >= 1024 && i < UNITS.length - 1) {
-    v /= 1024;
+  while (v >= step && i < UNITS.length - 1) {
+    v /= step;
     i++;
   }
   return `${i === 0 ? v : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${UNITS[i]}`;

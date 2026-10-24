@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, Folder, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./api";
-import { formatAge, formatCount, formatSize, percent } from "./format";
+import { formatAge, formatCount, formatSize, percent, setSizeUnits, SizeUnits } from "./format";
 import logo from "./assets/logo.png";
 import { Drives, SummaryCards } from "./Overview";
 import { ListView, Sort } from "./ListView";
@@ -22,6 +22,7 @@ const PANELS: [keyof Panels, string][] = [
   ["details", "Item Details"],
   ["topFiles", "Top Files"],
 ];
+const ALL_PANELS: Panels = { drives: true, stats: true, details: true, topFiles: true };
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -55,17 +56,15 @@ export default function App() {
   const [oneFs, setOneFs] = useState(() => load("oneFs", false));
   const [theme, setTheme] = useState<Theme>(() => load("theme", "system"));
   const [view, setView] = useState<View>(() => load("view", "treemap"));
-  const [panels, setPanels] = useState<Panels>(() => ({
-    drives: true,
-    stats: true,
-    details: true,
-    topFiles: true,
-    ...load<Partial<Panels>>("panels", {}),
-  }));
+  const [panels, setPanels] = useState<Panels>(() => ({ ...ALL_PANELS, ...load<Partial<Panels>>("panels", {}) }));
+  const [units, setUnits] = useState<SizeUnits>(() => load("units", "binary"));
+  setSizeUnits(units);
+  const [topCount, setTopCount] = useState(() => load("topCount", 10));
+  const [reopen, setReopen] = useState(() => load("reopen", false));
   const [viewMenu, setViewMenu] = useState(false);
   const [listSort, setListSort] = useState<Sort>(() => load("listSort", { key: "size", desc: true }));
   const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const [setupOpen, setSetupOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   useEffect(() => {
@@ -91,6 +90,12 @@ export default function App() {
   useEffect(() => save("view", view), [view]);
   useEffect(() => save("listSort", listSort), [listSort]);
   useEffect(() => save("panels", panels), [panels]);
+  useEffect(() => save("units", units), [units]);
+  useEffect(() => save("topCount", topCount), [topCount]);
+  useEffect(() => save("reopen", reopen), [reopen]);
+  useEffect(() => {
+    if (summary) save("lastRoot", summary.root_path);
+  }, [summary]);
 
   useEffect(() => {
     api.listRoots().then(setRoots).catch(() => {});
@@ -166,6 +171,15 @@ export default function App() {
     [oneFs],
   );
 
+  /** With "Open the last scanned folder" on, picks up where the last session left off. */
+  const reopened = useRef(false);
+  useEffect(() => {
+    if (reopened.current) return;
+    reopened.current = true;
+    const last = load<string | null>("lastRoot", null);
+    if (reopen && last) scan(last);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false, defaultPath: summary?.root_path });
     if (typeof dir === "string") scan(dir);
@@ -235,14 +249,14 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && (confirm || setupOpen || aboutOpen || viewMenu)) {
+      if (e.key === "Escape" && (confirm || settingsOpen || aboutOpen || viewMenu)) {
         setViewMenu(false);
         setConfirm(null);
-        setSetupOpen(false);
+        setSettingsOpen(false);
         setAboutOpen(false);
         return;
       }
-      if (confirm || setupOpen || aboutOpen || (scanning && !background)) return;
+      if (confirm || settingsOpen || aboutOpen || (scanning && !background)) return;
       if (e.key === "Delete" && selected && !scanning) requestDelete(selected.id);
       else if (e.key === "Backspace" || e.key === "Escape") zoomOut();
     };
@@ -275,16 +289,16 @@ export default function App() {
   useEffect(() => {
     if (!summary) return;
     let stale = false;
-    api.topFiles(current, 10).then((f) => !stale && setTopFiles(f)).catch(() => !stale && setTopFiles([]));
+    api.topFiles(current, topCount).then((f) => !stale && setTopFiles(f)).catch(() => !stale && setTopFiles([]));
     return () => {
       stale = true;
     };
-  }, [current, version, summary]);
+  }, [current, version, summary, topCount]);
 
   const [cacheSize, setCacheSize] = useState<number | null>(null);
   useEffect(() => {
-    if (setupOpen) api.cacheSize().then(setCacheSize).catch(() => setCacheSize(null));
-  }, [setupOpen]);
+    if (settingsOpen) api.cacheSize().then(setCacheSize).catch(() => setCacheSize(null));
+  }, [settingsOpen]);
   const clearCache = async () => {
     try {
       await api.clearCache();
@@ -344,7 +358,7 @@ export default function App() {
             </>
           )}
         </div>
-        <button onClick={() => setSetupOpen(true)}>Setup</button>
+        <button onClick={() => setSettingsOpen(true)}>Settings</button>
         <button onClick={() => setAboutOpen(true)}>About</button>
       </div>
 
@@ -406,6 +420,7 @@ export default function App() {
                   selectedId={selected?.id ?? null}
                   version={version}
                   dark={dark}
+                  units={units}
                   onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
                   onZoomIn={zoomIn}
                   onZoomOut={zoomOut}
@@ -518,22 +533,59 @@ export default function App() {
           </div>
         )}
 
-        {setupOpen && (
-          <div className="overlay" onClick={() => setSetupOpen(false)}>
-            <div className="dialog" onClick={(e) => e.stopPropagation()}>
-              <h2>Setup</h2>
-              <label>
-                Theme{" "}
+        {settingsOpen && (
+          <div className="overlay" onClick={() => setSettingsOpen(false)}>
+            <div className="dialog settings" onClick={(e) => e.stopPropagation()}>
+              <h2>Settings</h2>
+
+              <h3>Appearance</h3>
+              <div className="setting">
+                <span>Theme</span>
                 <select value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
                   <option value="system">System</option>
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>
+              </div>
+              <div className="setting">
+                <span>
+                  Size units
+                  <br />
+                  <span className="muted">Windows counts 1 KB as 1024 bytes; drive makers, macOS and GNOME as 1000.</span>
+                </span>
+                <select value={units} onChange={(e) => setUnits(e.target.value as SizeUnits)}>
+                  <option value="binary">1024 (Windows)</option>
+                  <option value="decimal">1000 (decimal)</option>
+                </select>
+              </div>
+              <div className="setting">
+                <span>Top Files shows</span>
+                <select value={topCount} onChange={(e) => setTopCount(Number(e.target.value))}>
+                  {[10, 25, 50].map((n) => (
+                    <option key={n} value={n}>{n} files</option>
+                  ))}
+                </select>
+              </div>
+              <div className="setting">
+                <span>
+                  Layout
+                  <br />
+                  <span className="muted">Show every panel the View menu can hide.</span>
+                </span>
+                <button onClick={() => setPanels(ALL_PANELS)}>Reset</button>
+              </div>
+
+              <h3>Scanning</h3>
+              <label>
+                <input type="checkbox" checked={reopen} onChange={(e) => setReopen(e.target.checked)} /> Open the last
+                scanned folder at startup
               </label>
               <label>
                 <input type="checkbox" checked={oneFs} onChange={(e) => setOneFs(e.target.checked)} /> Stay on one
                 filesystem when scanning
               </label>
+
+              <h3>Storage</h3>
               <div className="setting">
                 <span>
                   Saved scans{cacheSize !== null && `: ${formatSize(cacheSize)}`}
@@ -545,7 +597,7 @@ export default function App() {
                 </button>
               </div>
               <div className="actions">
-                <button onClick={() => setSetupOpen(false)}>Close</button>
+                <button onClick={() => setSettingsOpen(false)}>Close</button>
               </div>
             </div>
           </div>
