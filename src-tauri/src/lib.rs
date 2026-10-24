@@ -72,6 +72,18 @@ struct TopFile {
     trail: Vec<NodeId>,
 }
 
+/// One row of the List view.
+#[derive(Serialize)]
+struct Child {
+    id: NodeId,
+    name: String,
+    size: u64,
+    mtime: i64,
+    is_dir: bool,
+    files: u64,
+    dirs: u64,
+}
+
 #[derive(Serialize)]
 struct Root {
     path: String,
@@ -162,6 +174,50 @@ fn disk_space(path: &Path) -> (u64, u64) {
         .map_or((0, 0), |d| (d.total_space(), d.available_space()))
 }
 
+/// Mount points of other drives inside `root`, which a scan of `root` leaves to their own entry.
+/// Btrfs subvolumes such as /home share the root's device and are kept.
+#[cfg(not(windows))]
+fn other_drives(root: &Path) -> std::collections::HashSet<PathBuf> {
+    let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let disks = Disks::new_with_refreshed_list();
+    let Some(own) = disks
+        .list()
+        .iter()
+        .filter(|d| canon.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+    else {
+        return Default::default();
+    };
+    disks
+        .list()
+        .iter()
+        .filter(|d| d.name() != own.name() && d.mount_point() != canon && d.mount_point().starts_with(&canon))
+        // Scanned paths are built from `root` as given, which may differ from its canonical form.
+        .map(|d| root.join(d.mount_point().strip_prefix(&canon).unwrap()))
+        .collect()
+}
+#[cfg(windows)]
+fn other_drives(_: &Path) -> std::collections::HashSet<PathBuf> {
+    Default::default()
+}
+
+/// A readable name for a mounted drive: "System" for /, "Windows" for a Windows partition,
+/// otherwise the mount folder's name (the volume label, or its ID when it has none).
+#[cfg(not(windows))]
+fn drive_label(mount: &Path) -> String {
+    if mount == Path::new("/") {
+        "System".into()
+    } else if mount.join("Windows").join("System32").is_dir() {
+        "Windows".into()
+    } else {
+        mount.file_name().map_or_else(|| mount.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned())
+    }
+}
+#[cfg(windows)]
+fn drive_label(mount: &Path) -> String {
+    mount.to_string_lossy().into_owned()
+}
+
 #[tauri::command]
 fn list_roots() -> Vec<Root> {
     let mut roots: Vec<Root> = Vec::new();
@@ -173,14 +229,17 @@ fn list_roots() -> Vec<Root> {
     for d in Disks::new_with_refreshed_list().list() {
         let mount = d.mount_point().to_string_lossy().into_owned();
         let fs = d.file_system().to_string_lossy().to_lowercase();
+        // Desktops mount other drives under /run/media/<user>; the rest of /run is runtime state.
         let pseudo = matches!(fs.as_str(), "tmpfs" | "devtmpfs" | "squashfs" | "overlay" | "efivarfs")
-            || mount.starts_with("/run")
+            || (mount.starts_with("/run") && !mount.starts_with("/run/media/"))
             || mount.starts_with("/snap")
+            || mount.starts_with("/var/lib/snapd")
             || mount.starts_with("/boot");
         if d.total_space() == 0 || pseudo || roots.iter().any(|r| r.path == mount) {
             continue;
         }
-        roots.push(Root { path: mount.clone(), label: mount, total: d.total_space(), free: d.available_space() });
+        let label = drive_label(d.mount_point());
+        roots.push(Root { path: mount, label, total: d.total_space(), free: d.available_space() });
     }
     roots
 }
@@ -252,7 +311,8 @@ async fn start_scan(
     let result = {
         let (root, progress) = (root.clone(), progress.clone());
         tauri::async_runtime::spawn_blocking(move || {
-            scan::scan(&root, &scan::Options { one_filesystem }, &progress, &cancel, prev.as_deref())
+            let opts = scan::Options { one_filesystem, skip: other_drives(&root) };
+            scan::scan(&root, &opts, &progress, &cancel, prev.as_deref())
         })
         .await
         .map_err(|e| e.to_string())
@@ -332,6 +392,29 @@ fn top_files(state: State<'_, AppState>, id: NodeId, limit: usize) -> Result<Vec
     Ok(tree.largest_files(id, limit).into_iter().map(|f| top_file(tree, id, f)).collect())
 }
 
+/// The items directly inside folder `id`, biggest first.
+#[tauri::command]
+fn children(state: State<'_, AppState>, id: NodeId) -> Result<Vec<Child>, String> {
+    let guard = state.tree.lock().unwrap();
+    let tree = guard.as_ref().ok_or("nothing scanned yet")?;
+    let n = tree.node(id).ok_or("unknown node")?;
+    Ok(n.children
+        .iter()
+        .map(|&c| {
+            let n = &tree.nodes[c as usize];
+            Child {
+                id: c,
+                name: n.name.to_string(),
+                size: n.size,
+                mtime: n.mtime,
+                is_dir: n.is_dir,
+                files: n.files,
+                dirs: n.dirs,
+            }
+        })
+        .collect())
+}
+
 /// Opens a file with its default application, or a folder in the file manager.
 #[tauri::command]
 fn open_node(state: State<'_, AppState>, id: NodeId) -> Result<(), String> {
@@ -407,6 +490,7 @@ pub fn run() {
             get_layout,
             node_info,
             top_files,
+            children,
             open_node,
             reveal_node,
             delete_node,

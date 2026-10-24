@@ -7,11 +7,13 @@ import { api, Folder, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./a
 import { formatAge, formatCount, formatSize, percent } from "./format";
 import logo from "./assets/logo.png";
 import { Drives, SummaryCards } from "./Overview";
+import { ListView, Sort } from "./ListView";
 import { Details, TopFiles } from "./Sidebar";
 import { Treemap } from "./Treemap";
 import "./App.css";
 
 type Theme = "system" | "light" | "dark";
+type View = "treemap" | "list";
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -44,6 +46,8 @@ export default function App() {
   const [showFree, setShowFree] = useState(() => load("showFree", true));
   const [oneFs, setOneFs] = useState(() => load("oneFs", false));
   const [theme, setTheme] = useState<Theme>(() => load("theme", "system"));
+  const [view, setView] = useState<View>(() => load("view", "treemap"));
+  const [listSort, setListSort] = useState<Sort>(() => load("listSort", { key: "size", desc: true }));
   const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
   const [setupOpen, setSetupOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -68,6 +72,8 @@ export default function App() {
   useEffect(() => save("showFree", showFree), [showFree]);
   useEffect(() => save("oneFs", oneFs), [oneFs]);
   useEffect(() => save("theme", theme), [theme]);
+  useEffect(() => save("view", view), [view]);
+  useEffect(() => save("listSort", listSort), [listSort]);
 
   useEffect(() => {
     api.listRoots().then(setRoots).catch(() => {});
@@ -298,7 +304,7 @@ export default function App() {
         <button onClick={() => selected && zoomIn(selected.id)} disabled={!canZoomIn}>Zoom In</button>
         <button onClick={zoomOut} disabled={!hasTree || zoomStack.length === 1}>Zoom Out</button>
         <span className="sep" />
-        <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} disabled={!hasTree}>
+        <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} disabled={!hasTree || view !== "treemap"}>
           Free Space
         </button>
         <span className="grow" />
@@ -340,6 +346,14 @@ export default function App() {
                 ))}
               </nav>
               <span className="grow" />
+              <div className="tabs" role="tablist">
+                <button role="tab" aria-selected={view === "treemap"} className={view === "treemap" ? "on" : ""} onClick={() => setView("treemap")}>
+                  Treemap
+                </button>
+                <button role="tab" aria-selected={view === "list"} className={view === "list" ? "on" : ""} onClick={() => setView("list")}>
+                  List
+                </button>
+              </div>
               {viewSize !== undefined && (
                 <span className="muted">
                   {formatSize(viewSize)}
@@ -348,17 +362,29 @@ export default function App() {
               )}
             </header>
             <div className="panel-body">
-              <Treemap
-                nodeId={current}
-                showFree={showFree}
-                summary={summary}
-                selectedId={selected?.id ?? null}
-                version={version}
-                dark={dark}
-                onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
-                onZoomIn={zoomIn}
-                onZoomOut={zoomOut}
-              />
+              {view === "treemap" ? (
+                <Treemap
+                  nodeId={current}
+                  showFree={showFree}
+                  summary={summary}
+                  selectedId={selected?.id ?? null}
+                  version={version}
+                  dark={dark}
+                  onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
+                  onZoomIn={zoomIn}
+                  onZoomOut={zoomOut}
+                />
+              ) : (
+                <ListView
+                  nodeId={current}
+                  version={version}
+                  selectedId={selected?.id ?? null}
+                  sort={listSort}
+                  onSort={setListSort}
+                  onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
+                  onZoomIn={zoomIn}
+                />
+              )}
             </div>
           </section>
           <aside className="sidebar">
@@ -443,7 +469,7 @@ export default function App() {
               <p className="muted">Version {appVersion || "…"}</p>
               <p>A fast, lightweight disk-space treemap. See where the space went.</p>
               <p className="muted">
-                Built with Rust, Tauri and React.
+               
                 <br />© 2026 Leafyhead Technologies
                 <br />Released under the MIT License.
               </p>

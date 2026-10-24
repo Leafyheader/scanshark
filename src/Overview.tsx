@@ -26,7 +26,7 @@ const icons = {
   ),
 };
 
-function Icon({ name }: { name: keyof typeof icons }) {
+export function Icon({ name }: { name: keyof typeof icons }) {
   return (
     <svg className="icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
       {icons[name]}
@@ -143,6 +143,7 @@ export function Drives({ roots, current, disabled, onPick }: DrivesProps) {
           <Icon name={icon} />
           <span className="name">{r.label}</span>
         </span>
+        {r.label !== r.path && <span className="where">{r.path}</span>}
         {r.total > 0 && (
           <>
             <UsageBar used={r.total - r.free} total={r.total} />

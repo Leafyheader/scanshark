@@ -23,6 +23,18 @@ export function formatDate(unixSeconds: number): string {
   return unixSeconds > 0 ? dateFmt.format(new Date(unixSeconds * 1000)) : "";
 }
 
+const shortDateFmt = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+export function formatShortDate(unixSeconds: number): string {
+  return unixSeconds > 0 ? shortDateFmt.format(new Date(unixSeconds * 1000)) : "";
+}
+
 /** "5 min ago", "3 h ago", "2 days ago". */
 export function formatAge(unixSeconds: number): string {
   const s = Math.max(0, Date.now() / 1000 - unixSeconds);

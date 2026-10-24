@@ -14,6 +14,7 @@ Built with Rust, [Tauri 2](https://tauri.app) and React. The release binary is u
 - Selected Item panel with size, share, file counts, modified date and actions
 - Top Files list of the 10 largest files under the current folder; click one to jump to it
 - Summary cards for drive usage, file and folder counts and the largest file, and a drives list to switch drives in one click
+- List view of the current folder, sortable by name, size, file count or date, with the same selection, zooming and keyboard navigation
 - Zoom in, out and full; mouse wheel, double-click and breadcrumb navigation
 - Free-space block, reload, "stay on one filesystem" option
 - Scans are saved compactly, so a drive you scanned before shows at once while a quicker rescan skips unchanged folders; **Full Rescan** checks everything

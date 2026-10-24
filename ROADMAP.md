@@ -27,7 +27,7 @@ Notes from landing the first three: snapshots are kept for the last 5 roots, up 
 
 ## Phase 4: List view
 
-- [ ] A **List** tab next to the treemap: a table of the folder being viewed, with name, size, share, files and modified columns, sortable, with the same selection and zooming as the treemap.
+- [x] A **List** tab next to the treemap: a table of the folder being viewed, with name, size, share, files and modified columns, sortable, with the same selection and zooming as the treemap.
 
 ## Phase 5: Export and search
 
@@ -38,4 +38,5 @@ Notes from landing the first three: snapshots are kept for the last 5 roots, up 
 
 - [ ] Windows: hard links (for example in `C:\Windows\WinSxS`) are counted once per link, so the Windows folder looks bigger than it is.
 - [ ] Windows: "Stay on one filesystem" has no effect; hide it there or make it skip other volumes and junctions.
+- [ ] Linux: Windows partitions mounted by the desktop go through ntfs-3g (FUSE), which answers about 6,000 files a second against 30,000 or more on btrfs, so a full C: drive takes minutes. Mounting it with the kernel's `ntfs3` driver is much faster; consider detecting `fuseblk` and saying so in the app.
 - [ ] Moving the window to a screen with a different scale factor doesn't repaint the treemap at the new sharpness.

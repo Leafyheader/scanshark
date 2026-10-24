@@ -66,6 +66,16 @@ export interface TopFile {
   trail: number[];
 }
 
+export interface Child {
+  id: number;
+  name: string;
+  size: number;
+  mtime: number;
+  is_dir: boolean;
+  files: number;
+  dirs: number;
+}
+
 export interface Root {
   path: string;
   label: string;
@@ -90,6 +100,7 @@ export const api = {
     invoke<Rect[]>("get_layout", { id, width, height, showFree }),
   nodeInfo: (id: number) => invoke<NodeInfo>("node_info", { id }),
   topFiles: (id: number, limit: number) => invoke<TopFile[]>("top_files", { id, limit }),
+  children: (id: number) => invoke<Child[]>("children", { id }),
   openNode: (id: number) => invoke<void>("open_node", { id }),
   revealNode: (id: number) => invoke<void>("reveal_node", { id }),
   deleteNode: (id: number) => invoke<Summary>("delete_node", { id }),

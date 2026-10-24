@@ -20,6 +20,8 @@ pub struct Progress {
 
 pub struct Options {
     pub one_filesystem: bool,
+    /// Folders not to enter: other drives mounted inside the root, which have their own entry.
+    pub skip: HashSet<PathBuf>,
 }
 
 pub struct Scanned {
@@ -253,8 +255,12 @@ fn skip_dir(path: &Path, meta: &fs::Metadata, ctx: &Ctx) -> bool {
     if ctx.opts.one_filesystem && device_of(meta) != ctx.root_dev {
         return true;
     }
+    if ctx.opts.skip.contains(path) {
+        return true;
+    }
+    // /run holds runtime state and the desktop's mounts of other drives (/run/media), never files on /.
     #[cfg(target_os = "linux")]
-    if matches!(path.to_str(), Some("/proc" | "/sys" | "/dev")) {
+    if matches!(path.to_str(), Some("/proc" | "/sys" | "/dev" | "/run")) {
         return true;
     }
     let _ = path;
@@ -309,7 +315,7 @@ mod tests {
     fn scan_tree(dir: &Path, prev: Option<&Tree>, scanned_at: i64) -> Tree {
         let progress = Progress::default();
         let cancel = AtomicBool::new(false);
-        let s = scan(dir, &Options { one_filesystem: false }, &progress, &cancel, prev).unwrap().unwrap();
+        let s = scan(dir, &Options { one_filesystem: false, skip: HashSet::new() }, &progress, &cancel, prev).unwrap().unwrap();
         Tree {
             nodes: s.nodes,
             links: s.links,
