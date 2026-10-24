@@ -35,6 +35,16 @@ struct Summary {
     scanned_at: i64,
     /// Loaded from a snapshot; a fresh scan hasn't replaced it yet.
     cached: bool,
+    largest_file: Option<TopFile>,
+    /// The biggest folder directly under the root.
+    largest_folder: Option<Folder>,
+}
+
+#[derive(Serialize, Clone)]
+struct Folder {
+    id: NodeId,
+    name: String,
+    size: u64,
 }
 
 #[derive(Serialize)]
@@ -50,7 +60,7 @@ struct NodeInfo {
     parent_size: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct TopFile {
     id: NodeId,
     name: String,
@@ -78,8 +88,25 @@ struct ScanProgress {
     current: String,
 }
 
+/// File `f` as a Top Files row, relative to folder `id`.
+fn top_file(tree: &Tree, id: NodeId, f: NodeId) -> TopFile {
+    let n = &tree.nodes[f as usize];
+    let trail = tree.trail(id, f);
+    let dir: Vec<&str> = trail.iter().map(|&d| &*tree.nodes[d as usize].name).collect();
+    TopFile {
+        id: f,
+        name: n.name.to_string(),
+        dir: dir.join(std::path::MAIN_SEPARATOR_STR),
+        size: n.size,
+        mtime: n.mtime,
+        trail,
+    }
+}
+
 fn summarize(tree: &Tree) -> Summary {
     let root = &tree.nodes[ROOT as usize];
+    // Children are sorted by size, so the first folder is the biggest.
+    let largest_folder = root.children.iter().map(|&c| (c, &tree.nodes[c as usize])).find(|(_, n)| n.is_dir);
     Summary {
         root_path: tree.root_path.to_string_lossy().into_owned(),
         total_size: root.size,
@@ -90,6 +117,8 @@ fn summarize(tree: &Tree) -> Summary {
         scan_ms: tree.scan_ms,
         scanned_at: tree.scanned_at,
         cached: tree.cached,
+        largest_file: tree.largest_files(ROOT, 1).first().map(|&f| top_file(tree, ROOT, f)),
+        largest_folder: largest_folder.map(|(id, n)| Folder { id, name: n.name.to_string(), size: n.size }),
     }
 }
 
@@ -300,23 +329,7 @@ fn top_files(state: State<'_, AppState>, id: NodeId, limit: usize) -> Result<Vec
     let guard = state.tree.lock().unwrap();
     let tree = guard.as_ref().ok_or("nothing scanned yet")?;
     tree.node(id).ok_or("unknown node")?;
-    Ok(tree
-        .largest_files(id, limit)
-        .into_iter()
-        .map(|f| {
-            let n = &tree.nodes[f as usize];
-            let trail = tree.trail(id, f);
-            let dir: Vec<&str> = trail.iter().map(|&d| &*tree.nodes[d as usize].name).collect();
-            TopFile {
-                id: f,
-                name: n.name.to_string(),
-                dir: dir.join(std::path::MAIN_SEPARATOR_STR),
-                size: n.size,
-                mtime: n.mtime,
-                trail,
-            }
-        })
-        .collect())
+    Ok(tree.largest_files(id, limit).into_iter().map(|f| top_file(tree, id, f)).collect())
 }
 
 /// Opens a file with its default application, or a folder in the file manager.

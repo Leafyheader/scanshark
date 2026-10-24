@@ -3,9 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./api";
+import { api, Folder, NodeInfo, Root, ScanProgress, Summary, TopFile } from "./api";
 import { formatAge, formatCount, formatSize, percent } from "./format";
 import logo from "./assets/logo.png";
+import { Drives, SummaryCards } from "./Overview";
 import { Details, TopFiles } from "./Sidebar";
 import { Treemap } from "./Treemap";
 import "./App.css";
@@ -136,6 +137,7 @@ export default function App() {
       } finally {
         setScanning(false);
         setBackground(false);
+        api.listRoots().then(setRoots).catch(() => {});
       }
     },
     [oneFs],
@@ -171,6 +173,15 @@ export default function App() {
   const showFile = (f: TopFile) => {
     setZoomStack((s) => [...s, ...f.trail]);
     setSelected({ id: f.id, isDir: false });
+  };
+  /** The summary cards describe the whole scan, so their links start from the root. */
+  const showRootFile = (f: TopFile) => {
+    setZoomStack([0, ...f.trail]);
+    setSelected({ id: f.id, isDir: false });
+  };
+  const showRootFolder = (f: Folder) => {
+    setZoomStack([0, f.id]);
+    setSelected(null);
   };
 
   /** What the details panel and its buttons act on: the selection, or else the folder being viewed. */
@@ -304,6 +315,15 @@ export default function App() {
       <div className="main">
         {hasTree ? (
           <div className="workspace">
+          <Drives roots={roots} current={summary} disabled={scanning} onPick={scan} />
+          <div className="content">
+          <SummaryCards
+            summary={summary}
+            root={roots.find((r) => r.path === summary.root_path)}
+            onShowFile={showRootFile}
+            onShowFolder={showRootFolder}
+          />
+          <div className="work">
           <section className="panel">
             <header className="panel-head">
               <h2>Disk Usage</h2>
@@ -356,6 +376,8 @@ export default function App() {
             />
             <TopFiles files={topFiles} selectedId={selected?.id ?? null} onPick={showFile} />
           </aside>
+          </div>
+          </div>
           </div>
         ) : (
           <div className="welcome">

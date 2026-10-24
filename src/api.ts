@@ -32,6 +32,15 @@ export interface Summary {
   scanned_at: number;
   /** Loaded from a snapshot; a fresh scan hasn't replaced it yet. */
   cached: boolean;
+  largest_file: TopFile | null;
+  /** The biggest folder directly under the root. */
+  largest_folder: Folder | null;
+}
+
+export interface Folder {
+  id: number;
+  name: string;
+  size: number;
 }
 
 export interface NodeInfo {

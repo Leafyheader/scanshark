@@ -22,8 +22,8 @@ Notes from landing the first three: snapshots are kept for the last 5 roots, up 
 
 ## Phase 3: Summary cards and drive sidebar
 
-- [ ] **Summary cards** along the top: drive usage bar, total files, total folders, largest file.
-- [ ] **Drives sidebar** listing the drives (and Home), so you can switch drives without going back to the start screen.
+- [x] **Summary cards** along the top: drive usage bar, total files, total folders, largest file.
+- [x] **Drives sidebar** listing the drives (and Home), so you can switch drives without going back to the start screen.
 
 ## Phase 4: List view
 
