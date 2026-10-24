@@ -36,9 +36,10 @@ interface Props {
   onSort: (s: Sort) => void;
   onSelect: (id: number | null, isDir: boolean) => void;
   onZoomIn: (id: number) => void;
+  onMenu: (id: number, isDir: boolean, x: number, y: number) => void;
 }
 
-export function ListView({ nodeId, version, selectedId, sort, onSort, onSelect, onZoomIn }: Props) {
+export function ListView({ nodeId, version, selectedId, sort, onSort, onSelect, onZoomIn, onMenu }: Props) {
   const [items, setItems] = useState<Child[] | null>(null);
   const [showAll, setShowAll] = useState(false);
   const body = useRef<HTMLDivElement>(null);
@@ -114,6 +115,10 @@ export function ListView({ nodeId, version, selectedId, sort, onSort, onSelect, 
               className={r.id === selectedId ? "picked" : undefined}
               onClick={() => onSelect(r.id, r.is_dir)}
               onDoubleClick={() => r.is_dir && onZoomIn(r.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onMenu(r.id, r.is_dir, e.clientX, e.clientY);
+              }}
             >
               <td className="name" title={r.name}>
                 <span className="cell">

@@ -109,6 +109,7 @@ export const api = {
   openCached: (path: string) => invoke<Summary | null>("open_cached", { path }),
   startScan: (path: string, oneFilesystem: boolean, full: boolean) =>
     invoke<Summary | null>("start_scan", { path, oneFilesystem, full }),
+  rescanNode: (id: number) => invoke<Summary | null>("rescan_node", { id }),
   cancelScan: () => invoke<void>("cancel_scan"),
   getLayout: (id: number, width: number, height: number, showFree: boolean) =>
     invoke<Rect[]>("get_layout", { id, width, height, showFree }),

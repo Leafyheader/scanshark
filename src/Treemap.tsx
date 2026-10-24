@@ -19,6 +19,8 @@ interface Props {
   onSelect: (id: number | null, isDir: boolean) => void;
   onZoomIn: (id: number) => void;
   onZoomOut: () => void;
+  /** Right-click on a block; free space comes as FREE_ID. */
+  onMenu: (id: number, isDir: boolean, x: number, y: number) => void;
 }
 
 /** Lightness of a block `level` steps below the top-level one; nested folders alternate so each level stands out. */
@@ -89,7 +91,7 @@ function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string 
   return lo > 0 ? text.slice(0, lo) + "…" : "";
 }
 
-export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, units, onSelect, onZoomIn, onZoomOut }: Props) {
+export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, units, onSelect, onZoomIn, onZoomOut, onMenu }: Props) {
   const lastWheel = useRef(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -306,6 +308,14 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
           const r = rects[idx];
           if (!r || r.kind === KIND_FREE) onSelect(null, false);
           else onSelect(r.id, r.kind === KIND_DIR);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const r = rects[hitTest(e)];
+          if (!r) return;
+          setHover(null);
+          if (r.kind === KIND_FREE) onMenu(FREE_ID, false, e.clientX, e.clientY);
+          else onMenu(r.id, r.kind === KIND_DIR, e.clientX, e.clientY);
         }}
         onDoubleClick={(e) => {
           const r = rects[hitTest(e)];

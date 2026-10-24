@@ -307,6 +307,85 @@ async fn start_scan(
     };
 
     let cancel = state.cancel.clone();
+    let started = Instant::now();
+    let scanned_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let result = {
+        let root = root.clone();
+        with_progress(&app, move |progress| {
+            let opts = scan::Options { one_filesystem, skip: other_drives(&root), ..Default::default() };
+            scan::scan(&root, &opts, progress, &cancel, prev.as_deref())
+        })
+        .await
+    };
+    state.scanning.store(false, Ordering::SeqCst);
+
+    let Some(scanned) = result?? else { return Ok(None) };
+    let (disk_total, disk_free) = disk_space(&root);
+    let tree = Arc::new(Tree {
+        nodes: scanned.nodes,
+        links: scanned.links,
+        root_path: root,
+        disk_total,
+        disk_free,
+        scan_ms: started.elapsed().as_millis() as u64,
+        scanned_at,
+        one_filesystem,
+        cached: false,
+    });
+    let summary = summarize(&tree);
+    *state.tree.lock().unwrap() = Some(tree.clone());
+    save_snapshot(&app, tree)?;
+    Ok(Some(summary))
+}
+
+/// Scans folder `id` again in full and puts the result in place of its old contents, leaving
+/// the rest of the tree as it was. Returns `None` if cancelled.
+#[tauri::command]
+async fn rescan_node(app: AppHandle, state: State<'_, AppState>, id: NodeId) -> Result<Option<Summary>, String> {
+    let (path, root, one_filesystem, counted) = {
+        let guard = state.tree.lock().unwrap();
+        let tree = guard.as_ref().ok_or("nothing scanned yet")?;
+        if !tree.node(id).ok_or("unknown node")?.is_dir {
+            return Err("only folders can be rescanned".into());
+        }
+        (tree.path_of(id), tree.root_path.clone(), tree.one_filesystem, tree.links_counted_outside(id))
+    };
+    if state.scanning.swap(true, Ordering::SeqCst) {
+        return Err("a scan is already running".into());
+    }
+    state.cancel.store(false, Ordering::SeqCst);
+
+    let cancel = state.cancel.clone();
+    let result = {
+        let root = root.clone();
+        with_progress(&app, move |progress| {
+            let opts = scan::Options { one_filesystem, skip: other_drives(&root), counted };
+            scan::scan(&path, &opts, progress, &cancel, None)
+        })
+        .await
+    };
+    state.scanning.store(false, Ordering::SeqCst);
+
+    let Some(scanned) = result?? else { return Ok(None) };
+    let (disk_total, disk_free) = disk_space(&root);
+    let (summary, tree) = {
+        let mut guard = state.tree.lock().unwrap();
+        // Copies the tree if its snapshot is still being written.
+        let tree = Arc::make_mut(guard.as_mut().ok_or("nothing scanned yet")?);
+        tree.graft(id, scanned.nodes, scanned.links);
+        tree.disk_total = disk_total;
+        tree.disk_free = disk_free;
+        (summarize(tree), guard.clone().unwrap())
+    };
+    save_snapshot(&app, tree)?;
+    Ok(Some(summary))
+}
+
+/// Runs `work` on the blocking pool, sending its progress to the app every 100 ms meanwhile.
+async fn with_progress<T: Send + 'static>(
+    app: &AppHandle,
+    work: impl FnOnce(&scan::Progress) -> T + Send + 'static,
+) -> Result<T, String> {
     let progress = Arc::new(scan::Progress::default());
     let finished = Arc::new(AtomicBool::new(false));
 
@@ -329,45 +408,24 @@ async fn start_scan(
         })
     };
 
-    let started = Instant::now();
-    let scanned_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let result = {
-        let (root, progress) = (root.clone(), progress.clone());
-        tauri::async_runtime::spawn_blocking(move || {
-            let opts = scan::Options { one_filesystem, skip: other_drives(&root) };
-            scan::scan(&root, &opts, &progress, &cancel, prev.as_deref())
-        })
-        .await
-        .map_err(|e| e.to_string())
+        let progress = progress.clone();
+        tauri::async_runtime::spawn_blocking(move || work(&progress)).await.map_err(|e| e.to_string())
     };
-
     finished.store(true, Ordering::Relaxed);
     let _ = reporter.join();
-    state.scanning.store(false, Ordering::SeqCst);
+    result
+}
 
-    let Some(scanned) = result?? else { return Ok(None) };
-    let (disk_total, disk_free) = disk_space(&root);
-    let tree = Arc::new(Tree {
-        nodes: scanned.nodes,
-        links: scanned.links,
-        root_path: root,
-        disk_total,
-        disk_free,
-        scan_ms: started.elapsed().as_millis() as u64,
-        scanned_at,
-        one_filesystem,
-        cached: false,
-    });
-    let summary = summarize(&tree);
-    *state.tree.lock().unwrap() = Some(tree.clone());
-
-    let dir = snapshot_dir(&app)?;
+/// Saves `tree` as the snapshot of its root, on a thread of its own.
+fn save_snapshot(app: &AppHandle, tree: Arc<Tree>) -> Result<(), String> {
+    let dir = snapshot_dir(app)?;
     std::thread::spawn(move || {
         if let Err(e) = snapshot::save(&dir, &tree) {
             eprintln!("saving snapshot of {}: {e}", tree.root_path.display());
         }
     });
-    Ok(Some(summary))
+    Ok(())
 }
 
 #[tauri::command]
@@ -567,6 +625,7 @@ pub fn run() {
             list_roots,
             open_cached,
             start_scan,
+            rescan_node,
             cancel_scan,
             get_layout,
             node_info,

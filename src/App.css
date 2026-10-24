@@ -59,6 +59,15 @@ button.danger:not(:disabled) { color: var(--danger); }
 .menu label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
 .menu label:hover { background: var(--bg); }
 .menu input { margin: 0; accent-color: var(--accent); }
+.context-menu { position: fixed; right: auto; top: auto; min-width: 190px; }
+.context-menu button {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 4px; border: 0; border-radius: 5px;
+  background: none; text-align: left; white-space: nowrap; font-size: 13px;
+}
+.context-menu button:hover:not(:disabled) { background: var(--bg); }
+.context-menu .check { width: 16px; text-align: center; color: var(--accent); }
+.menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.tool.on .icon { color: inherit; }
 button.open { border-color: var(--accent); }
 
 .main { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }

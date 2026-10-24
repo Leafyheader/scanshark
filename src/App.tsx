@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { api, Folder, Hit, NodeInfo, ReportFormat, Root, ScanProgress, Summary, TopFile } from "./api";
+import { api, FREE_ID, Folder, Hit, NodeInfo, ReportFormat, Root, ScanProgress, Summary, TopFile } from "./api";
 import { formatAge, formatCount, formatSize, percent, setSizeUnits, SizeUnits } from "./format";
 import logoDark from "./assets/logo-dark.png";
 import logoLight from "./assets/logo-light.png";
@@ -12,6 +12,7 @@ import { Search } from "./Search";
 import { ListView, Sort } from "./ListView";
 import { Details, TopFiles } from "./Sidebar";
 import { Treemap } from "./Treemap";
+import { ContextMenu, MenuItem } from "./ContextMenu";
 import "./App.css";
 
 type Theme = "system" | "light" | "dark";
@@ -87,6 +88,17 @@ export default function App() {
     getVersion().then(setAppVersion).catch(() => {});
   }, []);
   const [confirm, setConfirm] = useState<NodeInfo | null>(null);
+  /** The right-click menu: where it opened and the item it is for (FREE_ID for free space). */
+  const [menu, setMenu] = useState<{ x: number; y: number; id: number; isDir: boolean } | null>(null);
+
+  // The webview's own menu (Reload, Inspect…) is no use here; text boxes keep theirs for copy and paste.
+  useEffect(() => {
+    const block = (e: MouseEvent) => {
+      if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) e.preventDefault();
+    };
+    window.addEventListener("contextmenu", block);
+    return () => window.removeEventListener("contextmenu", block);
+  }, []);
 
   const dark = theme === "dark" || (theme === "system" && systemDark);
   const current = zoomStack[zoomStack.length - 1];
@@ -197,6 +209,30 @@ export default function App() {
     if (reopen && last) scan(last);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Scans folder `id` again on its own, keeping the rest of the tree, and keeps the same place. */
+  const rescanFolder = async (id: number) => {
+    setError(null);
+    setScanning(true);
+    setBackground(true);
+    setProgress(null);
+    try {
+      const s = await api.rescanNode(id);
+      if (s) {
+        const place = await findPlace();
+        setSummary(s);
+        setZoomStack(place.stack);
+        setSelected(place.selected);
+        setVersion((v) => v + 1);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setScanning(false);
+      setBackground(false);
+      api.listRoots().then(setRoots).catch(() => {});
+    }
+  };
+
   const pickFolder = async () => {
     const dir = await open({ directory: true, multiple: false, defaultPath: summary?.root_path });
     if (typeof dir === "string") scan(dir);
@@ -270,7 +306,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && (confirm || settingsOpen || aboutOpen || viewMenu || exportOpen)) {
+      if (e.key === "Escape" && (confirm || settingsOpen || aboutOpen || viewMenu || exportOpen || menu)) {
+        setMenu(null);
         setViewMenu(false);
         setExportOpen(false);
         setConfirm(null);
@@ -278,7 +315,7 @@ export default function App() {
         setAboutOpen(false);
         return;
       }
-      if (confirm || settingsOpen || aboutOpen || exportOpen || (scanning && !background)) return;
+      if (confirm || settingsOpen || aboutOpen || exportOpen || menu || (scanning && !background)) return;
       // Backspace and Delete belong to the text being typed.
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       if (e.key === "Delete" && selected && !scanning) requestDelete(selected.id);
@@ -356,6 +393,26 @@ export default function App() {
   const logo = dark ? logoDark : logoLight;
   const canZoomIn = !!selected?.isDir && selected.id !== current;
 
+  const openMenu = (id: number, isDir: boolean, x: number, y: number) => {
+    if (id !== FREE_ID) setSelected({ id, isDir });
+    setMenu({ x, y, id, isDir });
+  };
+  const menuItems = (id: number, isDir: boolean): MenuItem[] => {
+    const free: MenuItem = { label: "Show Free Space", checked: showFree, onClick: () => setShowFree((v) => !v) };
+    if (id === FREE_ID) return [free];
+    const fail = (e: unknown) => setError(String(e));
+    const items: MenuItem[] = [];
+    if (isDir) items.push({ label: "Zoom In", disabled: id === current, onClick: () => zoomIn(id) });
+    items.push(
+      { label: isDir ? "Open Folder" : "Open File", onClick: () => api.openNode(id).catch(fail) },
+      { label: "Show in Folder", onClick: () => api.revealNode(id).catch(fail) },
+    );
+    if (isDir) items.push({ label: "Rescan Folder", disabled: scanning, onClick: () => rescanFolder(id) });
+    items.push({ label: "Delete…", danger: true, disabled: id === 0 || scanning, onClick: () => requestDelete(id) });
+    if (view === "treemap") items.push("sep", free);
+    return items;
+  };
+
   return (
     <div className="app">
       <div className="toolbar">
@@ -375,6 +432,15 @@ export default function App() {
           disabled={!hasTree || scanning}
         />
         <span className="sep" />
+        <Tool
+          icon="free"
+          label="Free Space"
+          title="Show free space in the treemap"
+          className={showFree ? "on" : ""}
+          onClick={() => setShowFree((v) => !v)}
+          disabled={!hasTree || view !== "treemap"}
+          aria-pressed={showFree}
+        />
         <Tool icon="export" label="Export…" title="Save a report of the folder being viewed" onClick={() => setExportOpen(true)} disabled={!hasTree} />
         <span className="grow" />
         {hasTree && <Search version={version} onPick={showHit} />}
@@ -458,11 +524,6 @@ export default function App() {
                 <button onClick={() => selected && zoomIn(selected.id)} disabled={!canZoomIn} title="Zoom into the selected folder (double-click)">
                   <Icon name="zoomIn" size={15} />
                 </button>
-                {view === "treemap" && (
-                  <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} title="Show free space" aria-pressed={showFree}>
-                    <Icon name="free" size={15} />
-                  </button>
-                )}
               </div>
               <div className="tabs" role="tablist">
                 <button role="tab" aria-selected={view === "treemap"} className={view === "treemap" ? "on" : ""} onClick={() => setView("treemap")}>
@@ -492,6 +553,7 @@ export default function App() {
                   onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
                   onZoomIn={zoomIn}
                   onZoomOut={zoomOut}
+                  onMenu={openMenu}
                 />
               ) : (
                 <ListView
@@ -502,6 +564,7 @@ export default function App() {
                   onSort={setListSort}
                   onSelect={(id, isDir) => setSelected(id === null ? null : { id, isDir })}
                   onZoomIn={zoomIn}
+                  onMenu={openMenu}
                 />
               )}
             </div>
@@ -549,6 +612,8 @@ export default function App() {
             </button>
           </div>
         )}
+
+        {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.id, menu.isDir)} onClose={() => setMenu(null)} />}
 
         {scanning && !background && (
           <div className="overlay">

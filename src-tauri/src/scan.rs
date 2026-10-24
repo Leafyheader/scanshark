@@ -18,10 +18,14 @@ pub struct Progress {
     pub current: Mutex<String>,
 }
 
+#[derive(Default)]
 pub struct Options {
     pub one_filesystem: bool,
     /// Folders not to enter: other drives mounted inside the root, which have their own entry.
     pub skip: HashSet<PathBuf>,
+    /// Hard-linked files (device, inode) whose size is already counted outside the folder being
+    /// scanned, so their links inside it count as 0.
+    pub counted: HashSet<(u64, u64)>,
 }
 
 pub struct Scanned {
@@ -49,8 +53,8 @@ impl Entry {
     }
 }
 
-/// A folder still to scan: path, name, mtime, and its node in the previous scan.
-type Subdir = (PathBuf, String, i64, Option<NodeId>);
+/// A folder still to scan: path, name, mtime (if already read), and its node in the previous scan.
+type Subdir = (PathBuf, String, Option<i64>, Option<NodeId>);
 
 struct Ctx<'a> {
     progress: &'a Progress,
@@ -86,7 +90,7 @@ pub fn scan(
         cancel,
         opts,
         root_dev: device_of(&meta),
-        seen_links: Mutex::new(HashSet::new()),
+        seen_links: Mutex::new(opts.counted.clone()),
         prev,
         prev_trusted_until: prev.map_or(0, |t| t.scanned_at - 2),
     };
@@ -98,7 +102,9 @@ pub fn scan(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut entry = pool.install(|| scan_dir(root, root.to_string_lossy().into_owned(), mtime_of(&meta), prev.map(|_| ROOT), &ctx));
+    let mut entry = pool
+        .install(|| scan_dir(root, root.to_string_lossy().into_owned(), Some(mtime_of(&meta)), prev.map(|_| ROOT), &ctx))
+        .expect("a folder with a known mtime is always scanned");
     if cancel.load(Ordering::Relaxed) {
         return Ok(None);
     }
@@ -112,10 +118,22 @@ pub fn scan(
     Ok(Some(out))
 }
 
-fn scan_dir(path: &Path, name: String, mtime: i64, cached: Option<NodeId>, ctx: &Ctx) -> Entry {
+/// Scans the folder at `path`. With no `mtime`, it is first looked up, and `None` is returned if
+/// the folder is gone, is no longer a folder, or is to be skipped.
+fn scan_dir(path: &Path, name: String, mtime: Option<i64>, cached: Option<NodeId>, ctx: &Ctx) -> Option<Entry> {
+    let mtime = match mtime {
+        Some(mtime) => mtime,
+        None => {
+            let meta = fs::symlink_metadata(path).ok().filter(|m| m.is_dir())?;
+            if skip_dir(path, &meta, ctx) {
+                return None;
+            }
+            mtime_of(&meta)
+        }
+    };
     let mut dir = Entry::dir(name, mtime);
     if ctx.cancel.load(Ordering::Relaxed) {
-        return dir;
+        return Some(dir);
     }
     ctx.progress.dirs.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut cur) = ctx.progress.current.try_lock() {
@@ -129,7 +147,7 @@ fn scan_dir(path: &Path, name: String, mtime: i64, cached: Option<NodeId>, ctx: 
 
     let sub: Vec<Entry> = subdirs
         .into_par_iter()
-        .map(|(p, name, mtime, cached)| scan_dir(&p, name, mtime, cached, ctx))
+        .filter_map(|(p, name, mtime, cached)| scan_dir(&p, name, mtime, cached, ctx))
         .collect();
     dir.children.extend(sub);
 
@@ -143,7 +161,7 @@ fn scan_dir(path: &Path, name: String, mtime: i64, cached: Option<NodeId>, ctx: 
             dir.files += 1;
         }
     }
-    dir
+    Some(dir)
 }
 
 /// Reads the folder at `path`, adding its files to `dir` and returning its subfolders.
@@ -172,7 +190,7 @@ fn list(path: &Path, cached: Option<NodeId>, dir: &mut Entry, ctx: &Ctx) -> Vec<
                 continue;
             }
             let cached = old.get(name.as_str()).copied();
-            subdirs.push((child, name, mtime_of(&meta), cached));
+            subdirs.push((child, name, Some(mtime_of(&meta)), cached));
         } else if meta.is_file() {
             let (size, link) = file_size(&meta, ctx);
             add_file(dir, Entry::file(name, size, mtime_of(&meta), link), ctx);
@@ -193,19 +211,10 @@ fn reuse(path: &Path, mtime: i64, cached: NodeId, dir: &mut Entry, ctx: &Ctx) ->
     for &c in &old.children {
         let n = &prev.nodes[c as usize];
         if n.is_dir {
-            let p = path.join(&*n.name);
-            let meta = fs::symlink_metadata(&p).ok()?;
-            if !meta.is_dir() {
-                return None;
-            }
-            if !skip_dir(&p, &meta, ctx) {
-                subdirs.push((p, n.name.to_string(), mtime_of(&meta), Some(c)));
-            }
-        }
-    }
-    for &c in &old.children {
-        let n = &prev.nodes[c as usize];
-        if !n.is_dir {
+            // Each subfolder looks itself up in its own task: one lookup per folder is most of a
+            // rescan's work, and on Windows each costs far more than on Linux.
+            subdirs.push((path.join(&*n.name), n.name.to_string(), None, Some(c)));
+        } else {
             let link = prev.links.get(&c).copied();
             let size = link.map_or(n.size, |l| counted(&l, ctx));
             add_file(dir, Entry::file(n.name.to_string(), size, n.mtime, link), ctx);
@@ -315,7 +324,7 @@ mod tests {
     fn scan_tree(dir: &Path, prev: Option<&Tree>, scanned_at: i64) -> Tree {
         let progress = Progress::default();
         let cancel = AtomicBool::new(false);
-        let s = scan(dir, &Options { one_filesystem: false, skip: HashSet::new() }, &progress, &cancel, prev).unwrap().unwrap();
+        let s = scan(dir, &Options::default(), &progress, &cancel, prev).unwrap().unwrap();
         Tree {
             nodes: s.nodes,
             links: s.links,
@@ -327,6 +336,18 @@ mod tests {
             one_filesystem: false,
             cached: false,
         }
+    }
+
+    // Windows opens a directory only with backup semantics, and setting its time needs write access.
+    #[cfg(windows)]
+    fn open_dir(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+        fs::OpenOptions::new().write(true).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(path).unwrap()
+    }
+    #[cfg(not(windows))]
+    fn open_dir(path: &Path) -> File {
+        File::open(path).unwrap()
     }
 
     fn test_dir(name: &str) -> PathBuf {
@@ -366,7 +387,7 @@ mod tests {
         // Adding a file changes a/b's time; back-date it so it differs within the same second too.
         fs::write(dir.join("a/b/new.bin"), vec![1u8; 50_000]).unwrap();
         let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-        File::open(dir.join("a/b")).unwrap().set_modified(old).unwrap();
+        open_dir(&dir.join("a/b")).set_modified(old).unwrap();
 
         let second = scan_tree(&dir, Some(&first), 0);
         assert_eq!(size_of(&second, "top.txt"), top_before);
@@ -377,5 +398,4 @@ mod tests {
         let full = scan_tree(&dir, None, 0);
         assert!(size_of(&full, "top.txt") >= 200_000);
         let _ = fs::remove_dir_all(&dir);
-    }
-}
+    }}
