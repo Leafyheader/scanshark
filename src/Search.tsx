@@ -85,10 +85,11 @@ export function Search({ version, onPick }: Props) {
   const showList = open && query.trim() !== "";
   return (
     <div className="search">
+      <Icon name="search" size={15} />
       <input
         ref={input}
         type="search"
-        placeholder="Search names… (Ctrl+F)"
+        placeholder="Search… (Ctrl+F)"
         value={query}
         spellCheck={false}
         onChange={(e) => {

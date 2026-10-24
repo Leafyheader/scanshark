@@ -24,11 +24,98 @@ const icons = {
       <path d="M14 3v5h5" />
     </>
   ),
+  open: (
+    <>
+      <path d="M3 19V5h6l2 2h8v3" />
+      <path d="M3 19l3-8h15l-3 8z" />
+    </>
+  ),
+  reload: (
+    <>
+      <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+      <path d="M20 4v5h-5" />
+    </>
+  ),
+  rescan: (
+    <>
+      <path d="M4.5 10A8 8 0 0 1 18 6.5M19.5 14A8 8 0 0 1 6 17.5" />
+      <path d="M18 3v4h-4M6 21v-4h4" />
+    </>
+  ),
+  export: (
+    <>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 20h16" />
+    </>
+  ),
+  view: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16M3 10h12" />
+    </>
+  ),
+  settings: (
+    <>
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+      <circle cx="15" cy="7" r="2" />
+      <circle cx="9" cy="17" r="2" />
+    </>
+  ),
+  about: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v6M12 7.5v.5" />
+    </>
+  ),
+  top: (
+    <>
+      <path d="M5 4h14M12 20V9" />
+      <path d="m7 13 5-5 5 5" />
+    </>
+  ),
+  up: (
+    <>
+      <path d="M12 19V5" />
+      <path d="m6 11 6-6 6 6" />
+    </>
+  ),
+  zoomIn: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4-4M11 8v6M8 11h6" />
+    </>
+  ),
+  free: (
+    <>
+      <path d="M11 4a8 8 0 1 0 9 9h-9z" />
+      <path d="M14 3a7 7 0 0 1 7 7h-7z" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4-4" />
+    </>
+  ),
 };
 
-export function Icon({ name }: { name: keyof typeof icons }) {
+export type IconName = keyof typeof icons;
+
+export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return (
-    <svg className="icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
       {icons[name]}
     </svg>
   );

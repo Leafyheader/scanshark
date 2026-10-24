@@ -5,8 +5,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, Folder, Hit, NodeInfo, ReportFormat, Root, ScanProgress, Summary, TopFile } from "./api";
 import { formatAge, formatCount, formatSize, percent, setSizeUnits, SizeUnits } from "./format";
-import logo from "./assets/logo.png";
-import { baseName, Drives, SummaryCards } from "./Overview";
+import logoDark from "./assets/logo-dark.png";
+import logoLight from "./assets/logo-light.png";
+import { baseName, Drives, Icon, IconName, SummaryCards } from "./Overview";
 import { Search } from "./Search";
 import { ListView, Sort } from "./ListView";
 import { Details, TopFiles } from "./Sidebar";
@@ -24,6 +25,16 @@ const PANELS: [keyof Panels, string][] = [
   ["topFiles", "Top Files"],
 ];
 const ALL_PANELS: Panels = { drives: true, stats: true, details: true, topFiles: true };
+
+/** A toolbar button: an icon with a label, which narrow windows drop in favour of the tooltip. */
+function Tool({ icon, label, title, className, ...rest }: { icon: IconName; label: string } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button className={`tool ${className ?? ""}`} title={title ?? label} {...rest}>
+      <Icon name={icon} size={16} />
+      <span className="label">{label}</span>
+    </button>
+  );
+}
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -342,44 +353,42 @@ export default function App() {
   };
 
   const hasTree = summary !== null;
+  const logo = dark ? logoDark : logoLight;
   const canZoomIn = !!selected?.isDir && selected.id !== current;
 
   return (
     <div className="app">
       <div className="toolbar">
-        <button onClick={pickFolder} disabled={scanning}>Open…</button>
-        <button
+        <Tool icon="open" label="Open…" title="Scan a folder" onClick={pickFolder} disabled={scanning} />
+        <Tool
+          icon="reload"
+          label="Reload"
+          title="Scan again, skipping folders that haven't changed"
           onClick={() => summary && scan(summary.root_path)}
           disabled={!hasTree || scanning}
-          title="Scan again, skipping folders that haven't changed"
-        >
-          Reload
-        </button>
-        <button
+        />
+        <Tool
+          icon="rescan"
+          label="Full Rescan"
+          title="Scan everything again, including files that changed size in place"
           onClick={() => summary && scan(summary.root_path, true)}
           disabled={!hasTree || scanning}
-          title="Scan everything again, including files that changed size in place"
-        >
-          Full Rescan
-        </button>
+        />
         <span className="sep" />
-        <button onClick={zoomFull} disabled={!hasTree || zoomStack.length === 1}>Zoom Full</button>
-        <button onClick={() => selected && zoomIn(selected.id)} disabled={!canZoomIn}>Zoom In</button>
-        <button onClick={zoomOut} disabled={!hasTree || zoomStack.length === 1}>Zoom Out</button>
-        <span className="sep" />
-        <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} disabled={!hasTree || view !== "treemap"}>
-          Free Space
-        </button>
-        <span className="sep" />
-        <button onClick={() => setExportOpen(true)} disabled={!hasTree} title="Save a report of the folder being viewed">
-          Export…
-        </button>
+        <Tool icon="export" label="Export…" title="Save a report of the folder being viewed" onClick={() => setExportOpen(true)} disabled={!hasTree} />
         <span className="grow" />
         {hasTree && <Search version={version} onPick={showHit} />}
+        <span className="grow" />
         <div className="menu-wrap">
-          <button className={viewMenu ? "open" : ""} onClick={() => setViewMenu((v) => !v)} aria-haspopup="menu" aria-expanded={viewMenu}>
-            View ▾
-          </button>
+          <Tool
+            icon="view"
+            label="View"
+            title="Show or hide panels"
+            className={viewMenu ? "open" : ""}
+            onClick={() => setViewMenu((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={viewMenu}
+          />
           {viewMenu && (
             <>
               <div className="menu-backdrop" onClick={() => setViewMenu(false)} />
@@ -394,8 +403,8 @@ export default function App() {
             </>
           )}
         </div>
-        <button onClick={() => setSettingsOpen(true)}>Settings</button>
-        <button onClick={() => setAboutOpen(true)}>About</button>
+        <Tool icon="settings" label="Settings" onClick={() => setSettingsOpen(true)} />
+        <Tool icon="about" label="About" onClick={() => setAboutOpen(true)} />
       </div>
 
       {exported && (
@@ -439,6 +448,22 @@ export default function App() {
                 ))}
               </nav>
               <span className="grow" />
+              <div className="tools">
+                <button onClick={zoomFull} disabled={zoomStack.length === 1} title="Back to the top">
+                  <Icon name="top" size={15} />
+                </button>
+                <button onClick={zoomOut} disabled={zoomStack.length === 1} title="Up one level (Backspace)">
+                  <Icon name="up" size={15} />
+                </button>
+                <button onClick={() => selected && zoomIn(selected.id)} disabled={!canZoomIn} title="Zoom into the selected folder (double-click)">
+                  <Icon name="zoomIn" size={15} />
+                </button>
+                {view === "treemap" && (
+                  <button className={showFree ? "on" : ""} onClick={() => setShowFree((v) => !v)} title="Show free space" aria-pressed={showFree}>
+                    <Icon name="free" size={15} />
+                  </button>
+                )}
+              </div>
               <div className="tabs" role="tablist">
                 <button role="tab" aria-selected={view === "treemap"} className={view === "treemap" ? "on" : ""} onClick={() => setView("treemap")}>
                   Treemap
@@ -503,7 +528,7 @@ export default function App() {
           </div>
         ) : (
           <div className="welcome">
-            <img className="hero" src={logo} alt="ScanShark" width={220} height={220} />
+            <img className="hero" src={logo} alt="ScanShark" width={300} />
             <p>Pick a drive or folder to see where the space went.</p>
             <div className="roots">
               {roots.map((r) => (
@@ -561,7 +586,7 @@ export default function App() {
         {aboutOpen && (
           <div className="overlay" onClick={() => setAboutOpen(false)}>
             <div className="dialog about" onClick={(e) => e.stopPropagation()}>
-              <img className="logo" src={logo} alt="ScanShark logo" width={180} height={180} />
+              <img className="logo" src={logo} alt="ScanShark logo" width={220} />
               <p className="muted">Version {appVersion || "…"}</p>
               <p>A fast, lightweight disk-space treemap. See where the space went.</p>
               <p className="muted">

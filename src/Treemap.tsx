@@ -23,7 +23,8 @@ interface Props {
 
 /** Lightness of a block `level` steps below the top-level one; nested folders alternate so each level stands out. */
 function lightness(kind: number, level: number, dark: boolean): number {
-  const dir = dark ? [30, 41, 35, 45] : [44, 55, 49, 58];
+  // Light mode keeps every block light enough for dark text, whatever its hue.
+  const dir = dark ? [30, 41, 35, 45] : [62, 71, 66, 74];
   const l = dir[Math.min(level, 3)];
   return kind === KIND_DIR ? l : l + (dark ? 9 : 8);
 }
@@ -181,9 +182,9 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
           ctx.lineWidth = r.depth === 1 ? 1.5 : 1;
           ctx.stroke();
         }
-        if (!dark && l >= 58) {
-          fg = "#0f172a";
-          fgDim = "rgba(15,23,42,0.7)";
+        if (!dark) {
+          fg = ink;
+          fgDim = "rgba(43,38,32,0.72)";
         }
       }
 
@@ -219,14 +220,14 @@ export function Treemap({ nodeId, showFree, summary, selectedId, version, dark, 
     if (hovered && hovered.depth > 0) {
       const [x, y, w, h] = inset(hovered);
       shape(ctx, x, y, w, h, hovered.depth <= 1 ? 7 : 4);
-      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.fillStyle = dark ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.35)";
       ctx.fill();
     }
     if (selectedIdx >= 0) {
       const r = rects[selectedIdx];
       const [x, y, w, h] = inset(r);
       shape(ctx, x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2), r.depth <= 1 ? 6 : 3);
-      ctx.strokeStyle = dark ? "#ffffff" : "#0f172a";
+      ctx.strokeStyle = dark ? "#ffffff" : "#2b2620";
       ctx.lineWidth = 2;
       ctx.stroke();
     }
