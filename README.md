@@ -11,6 +11,12 @@ A fast, lightweight disk-space treemap in the spirit of SpaceMonger. Point it at
 
 Built with Rust, [Tauri 2](https://tauri.app) and React. The release binary is under 5 MB because it uses the system web view instead of bundling a browser.
 
+## Screenshots
+
+![Treemap view of a scanned drive with hover tooltip](screenshots/treemap.png)
+
+![List view with the Selected Item and Top Files panels](screenshots/list-details.png)
+
 ## Features
 
 - Parallel scan with live progress; hard links are counted once and symlinks are skipped
